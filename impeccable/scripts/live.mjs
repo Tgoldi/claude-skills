@@ -17,7 +17,7 @@
  *   node live.mjs --help
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -93,7 +93,6 @@ The agent should then:
   console.log(JSON.stringify({
     ok: true,
     serverPort: serverInfo.port,
-    serverToken: serverInfo.token,
     pageFiles: resolvedFiles,
     configDrift: drift,
     hasProduct: ctx.hasProduct,
@@ -204,11 +203,10 @@ function globToRegex(pattern) {
 
 function runScript(name, args) {
   const scriptPath = path.join(__dirname, name);
-  const cmd = `node "${scriptPath}" ${args.map(a => `"${a}"`).join(' ')}`;
   try {
-    return execSync(cmd, { encoding: 'utf-8', cwd: process.cwd(), timeout: 15_000 });
+    return execFileSync('node', [scriptPath, ...args], { encoding: 'utf-8', cwd: process.cwd(), timeout: 15_000 });
   } catch (err) {
-    // execSync throws on non-zero exit; return stdout if any
+    // execFileSync throws on non-zero exit; return stdout if any
     return err.stdout || err.message || '';
   }
 }

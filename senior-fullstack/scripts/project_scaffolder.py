@@ -265,13 +265,14 @@ app.include_router(router, prefix="/api")
 async def health_check():
     return {{"status": "healthy"}}
 ''',
-        "config.py": '''from pydantic_settings import BaseSettings
+        "config.py": '''import os
+from pydantic_settings import BaseSettings
 from typing import List
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://user:pass@localhost:5432/db"
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
-    SECRET_KEY: str = "change-me-in-production"
+    SECRET_KEY: str = os.environ["SECRET_KEY"]
 
     class Config:
         env_file = ".env"
@@ -627,7 +628,7 @@ export default config;
 module.exports = { reactStrictMode: true };
 ''',
         ".env.example": '''DATABASE_URL="postgresql://user:password@localhost:5432/dbname"
-SECRET_KEY="your-secret-here"
+SECRET_KEY=
 ''',
         ".gitignore": '''node_modules/
 .next/

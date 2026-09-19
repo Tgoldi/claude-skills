@@ -374,7 +374,7 @@ const allUsers = db.query("SELECT * FROM users").all();
 
 ```typescript
 // Hash password
-const password = "super-secret";
+const password = process.env.EXAMPLE_PASSWORD;
 const hash = await Bun.password.hash(password);
 
 // Verify password

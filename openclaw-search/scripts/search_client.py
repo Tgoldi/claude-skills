@@ -14,14 +14,43 @@ Usage:
 """
 
 import argparse
+import ipaddress
 import json
 import os
+import socket
 import sys
 import urllib.request
 import urllib.parse
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
+
+
+def _validate_public_url(url: str) -> str:
+    """Validate that a user-supplied URL uses http(s) and does not resolve to
+    a private, loopback, link-local, or cloud-metadata address."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("URL must use http or https scheme")
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("URL must include a hostname")
+    try:
+        addrinfo = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as exc:
+        raise ValueError(f"Unable to resolve host: {hostname}") from exc
+    for family, _, _, _, sockaddr in addrinfo:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise ValueError(f"URL resolves to a disallowed address: {ip}")
+    return url
 
 
 class SearchClient:
@@ -45,8 +74,13 @@ class SearchClient:
         data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Make an HTTP request to the AIsa API."""
+        base_host = urllib.parse.urlparse(self.BASE_URL).hostname
+        if not endpoint.startswith("/") or ".." in endpoint:
+            raise ValueError("Invalid endpoint")
         url = f"{self.BASE_URL}{endpoint}"
-        
+        if urllib.parse.urlparse(url).hostname != base_host:
+            raise ValueError("Host not allowed")
+
         if params:
             query_string = urllib.parse.urlencode(
                 {k: v for k, v in params.items() if v is not None}
@@ -141,10 +175,12 @@ class SearchClient:
     
     def tavily_crawl(self, url: str, max_depth: int = 2) -> Dict[str, Any]:
         """Crawl web pages."""
+        url = _validate_public_url(url)
         return self._request("POST", "/tavily/crawl", data={"url": url, "max_depth": max_depth})
     
     def tavily_map(self, url: str) -> Dict[str, Any]:
         """Generate site map."""
+        url = _validate_public_url(url)
         return self._request("POST", "/tavily/map", data={"url": url})
     
     # ==================== Verity-Style Multi-Source Search ====================

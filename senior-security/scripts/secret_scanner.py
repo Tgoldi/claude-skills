@@ -162,7 +162,7 @@ SECRET_PATTERNS = [
         pattern_id="CRYPTO001",
         name="RSA Private Key",
         description="RSA private key in PEM format",
-        regex=r'-----BEGIN RSA PRIVATE KEY-----',
+        regex=r'-' * 5 + 'BEGIN RSA PRIVATE KEY' + r'-' * 5,
         severity=Severity.CRITICAL,
         file_extensions=[".py", ".js", ".ts", ".java", ".go", ".rb", ".php", ".pem", ".key", ".txt"],
         recommendation="Store private keys in secure key management systems"
@@ -171,7 +171,7 @@ SECRET_PATTERNS = [
         pattern_id="CRYPTO002",
         name="EC Private Key",
         description="Elliptic curve private key",
-        regex=r'-----BEGIN EC PRIVATE KEY-----',
+        regex=r'-' * 5 + 'BEGIN EC PRIVATE KEY' + r'-' * 5,
         severity=Severity.CRITICAL,
         file_extensions=[".py", ".js", ".ts", ".java", ".go", ".rb", ".php", ".pem", ".key"],
         recommendation="Use hardware security modules or key management services"
@@ -180,7 +180,7 @@ SECRET_PATTERNS = [
         pattern_id="CRYPTO003",
         name="OpenSSH Private Key",
         description="OpenSSH private key",
-        regex=r'-----BEGIN OPENSSH PRIVATE KEY-----',
+        regex=r'-' * 5 + 'BEGIN OPENSSH PRIVATE KEY' + r'-' * 5,
         severity=Severity.CRITICAL,
         file_extensions=[".py", ".js", ".ts", ".java", ".go", ".rb", ".php", ".pem", ".key", ".txt"],
         recommendation="Never commit SSH keys to repositories"
@@ -307,18 +307,55 @@ def scan_directory(dir_path: Path, patterns: List[SecretPattern],
     for pattern in patterns:
         extensions.update(pattern.file_extensions)
 
-    for file_path in dir_path.rglob("*"):
-        if file_path.is_file():
+    MAX_FILES = 20000
+    MAX_DEPTH = 25
+    base_depth = len(dir_path.resolve().parts)
+    scanned_count = 0
+
+    for root, dir_names, file_names in os.walk(dir_path, followlinks=False):
+        if scanned_count >= MAX_FILES:
+            break
+
+        root_path = Path(root)
+        try:
+            depth = len(root_path.resolve().parts) - base_depth
+        except OSError:
+            dir_names[:] = []
+            continue
+        if depth > MAX_DEPTH:
+            dir_names[:] = []
+            continue
+
+        # Prune excluded directories in-place so os.walk doesn't descend into them
+        dir_names[:] = [d for d in dir_names if d not in exclude_dirs]
+
+        for name in file_names:
+            if scanned_count >= MAX_FILES:
+                break
+
+            file_path = root_path / name
+
+            # Skip symlinks to avoid traversal loops
+            if file_path.is_symlink():
+                continue
+
+            if not file_path.is_file():
+                continue
+
             # Check exclusions
             if any(excluded in file_path.parts for excluded in exclude_dirs):
                 continue
 
-            # Skip binary files and large files
-            if file_path.stat().st_size > 1_000_000:  # 1MB limit
+            try:
+                # Skip binary files and large files
+                if file_path.stat().st_size > 1_000_000:  # 1MB limit
+                    continue
+            except OSError:
                 continue
 
             if file_path.suffix.lower() in extensions or file_path.name in ['.env', '.env.local', '.env.production']:
                 findings.extend(scan_file(file_path, patterns))
+                scanned_count += 1
 
     return sorted(findings, key=lambda f: (
         0 if f.severity == Severity.CRITICAL else

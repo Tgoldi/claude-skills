@@ -26,6 +26,7 @@ from datetime import datetime
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 from urllib.parse import urlparse
+from werkzeug.utils import secure_filename
 import ssl
 
 
@@ -95,12 +96,9 @@ class HTTPClient:
         self.verify_ssl = verify_ssl
 
         # Create SSL context
+        self.ssl_context = ssl.create_default_context()
         if not verify_ssl:
-            self.ssl_context = ssl.create_default_context()
-            self.ssl_context.check_hostname = False
-            self.ssl_context.verify_mode = ssl.CERT_NONE
-        else:
-            self.ssl_context = None
+            print("Warning: SSL certificate verification cannot be disabled; using secure defaults", file=sys.stderr)
 
     def request(self, url: str, method: str = 'GET', body: Optional[bytes] = None) -> RequestResult:
         """Execute HTTP request and return result."""
@@ -585,15 +583,23 @@ Examples:
         if args.json:
             output = json.dumps(results, indent=2)
             if args.output:
-                with open(args.output, 'w') as f:
+                base = os.path.realpath(os.getcwd())
+                name = secure_filename(os.path.basename(args.output))
+                full = os.path.realpath(os.path.join(base, name))
+                assert full.startswith(base + os.sep), "Invalid output path"
+                with open(full, 'w') as f:
                     f.write(output)
-                print(f"\nResults written to: {args.output}")
+                print(f"\nResults written to: {full}")
             else:
                 print(output)
         elif args.output:
-            with open(args.output, 'w') as f:
+            base = os.path.realpath(os.getcwd())
+            name = secure_filename(os.path.basename(args.output))
+            full = os.path.realpath(os.path.join(base, name))
+            assert full.startswith(base + os.sep), "Invalid output path"
+            with open(full, 'w') as f:
                 json.dump(results, f, indent=2)
-            print(f"\nResults written to: {args.output}")
+            print(f"\nResults written to: {full}")
 
     except KeyboardInterrupt:
         print("\nTest interrupted by user")

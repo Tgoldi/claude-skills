@@ -4,6 +4,8 @@ SEO audit script (no API required)
 Usage: python3 scripts/seo_audit.py "https://example.com"
 """
 import argparse
+import ipaddress
+import socket
 import urllib.request
 import urllib.parse
 import re
@@ -11,12 +13,64 @@ import time
 import sys
 
 
+def _resolve_and_validate_host(hostname: str) -> str:
+    """Resolve hostname and ensure it does not point to a private,
+    loopback, link-local, or other disallowed IP range. Returns the
+    resolved IP address to connect to."""
+    try:
+        addrinfo = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as e:
+        raise ValueError(f"Could not resolve host: {hostname}") from e
+
+    resolved_ip = None
+    for family, _, _, _, sockaddr in addrinfo:
+        ip_str = sockaddr[0]
+        ip = ipaddress.ip_address(ip_str)
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise ValueError(f"Host resolves to disallowed address: {ip_str}")
+        if resolved_ip is None:
+            resolved_ip = ip_str
+    if resolved_ip is None:
+        raise ValueError(f"Could not resolve host: {hostname}")
+    return resolved_ip
+
+
+def _validate_url(url: str) -> None:
+    """Validate scheme and host before making any request. Raises
+    ValueError if the URL is not allowed."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Disallowed URL scheme: {parsed.scheme}")
+    if not parsed.hostname:
+        raise ValueError("URL has no hostname")
+    _resolve_and_validate_host(parsed.hostname)
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Block automatic redirects so a validated URL cannot be used to
+    bounce the request to a disallowed destination."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_no_redirect_opener = urllib.request.build_opener(_NoRedirectHandler)
+
+
 def fetch_url(url: str, timeout: int = 30) -> tuple:
     """Fetch URL and return (content, headers, load_time)"""
     try:
+        _validate_url(url)
         start = time.time()
         req = urllib.request.Request(url, headers={"User-Agent": "SEO-Audit/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _no_redirect_opener.open(req, timeout=timeout) as resp:
             content = resp.read().decode("utf-8", errors="ignore")
             headers = dict(resp.headers)
             load_time = time.time() - start

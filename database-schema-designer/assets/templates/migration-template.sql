@@ -12,10 +12,31 @@ BEGIN;
 -- Step 1: Create table
 CREATE TABLE IF NOT EXISTS table_name (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES auth.users(id),
   column_name VARCHAR(255) NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
+
+-- Step 1b: Enable Row Level Security and add per-operation, owner-scoped policies
+ALTER TABLE table_name ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY table_name_select_own ON table_name
+  FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY table_name_insert_own ON table_name
+  FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY table_name_update_own ON table_name
+  FOR UPDATE
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY table_name_delete_own ON table_name
+  FOR DELETE
+  USING (auth.uid() = user_id);
 
 -- Step 2: Add indexes
 CREATE INDEX idx_table_column ON table_name(column_name);

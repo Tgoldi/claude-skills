@@ -424,7 +424,13 @@ def main():
         sys.exit(1)
     
     # Read interview transcript
-    with open(sys.argv[1], 'r') as f:
+    import os
+    base = os.path.realpath(os.getcwd())
+    full = os.path.realpath(os.path.join(base, sys.argv[1]))
+    if not (full == base or full.startswith(base + os.sep)):
+        print("Error: invalid file path")
+        sys.exit(1)
+    with open(full, 'r') as f:
         interview_text = f.read()
     
     # Analyze

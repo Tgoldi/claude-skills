@@ -86,6 +86,10 @@ Output (JSON):
   if (args.includes('--remove')) {
     const results = resolvedFiles.map((relFile) => {
       const absFile = path.resolve(process.cwd(), relFile);
+      const relCheck = path.relative(process.cwd(), absFile);
+      if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
+        return { file: relFile, error: 'path_outside_root' };
+      }
       if (!fs.existsSync(absFile)) return { file: relFile, error: 'file_not_found' };
       const content = fs.readFileSync(absFile, 'utf-8');
       const detagged = removeTag(content, config.commentSyntax);
@@ -105,13 +109,18 @@ Output (JSON):
   // Insert mode — need --port
   const portIdx = args.indexOf('--port');
   const port = portIdx !== -1 ? parseInt(args[portIdx + 1], 10) : NaN;
-  if (!Number.isFinite(port)) {
-    console.error(JSON.stringify({ ok: false, error: 'missing_port' }));
+  if (!Number.isFinite(port) || port < 3000 || port > 9999 ||
+      [22, 80, 443, 3306, 5432, 6379, 27017].includes(port)) {
+    console.error(JSON.stringify({ ok: false, error: 'invalid_port' }));
     process.exit(1);
   }
 
   const results = resolvedFiles.map((relFile) => {
     const absFile = path.resolve(process.cwd(), relFile);
+    const relCheck = path.relative(process.cwd(), absFile);
+    if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
+      return { file: relFile, error: 'path_outside_root' };
+    }
     if (!fs.existsSync(absFile)) return { file: relFile, error: 'file_not_found' };
     const content = fs.readFileSync(absFile, 'utf-8');
     const withoutOld = revertCspMeta(removeTag(content, config.commentSyntax));
@@ -171,6 +180,8 @@ export function resolveFiles(rootDir, config) {
       if (!ent.isFile || !ent.isFile()) continue;
       const abs = path.join(ent.parentPath || ent.path || rootDir, ent.name);
       const rel = path.relative(rootDir, abs).split(path.sep).join('/');
+      // Reject anything that escapes rootDir (traversal) or resolves outside it.
+      if (rel.startsWith('..') || path.isAbsolute(rel)) continue;
       if (isExcluded(rel)) continue;
       if (seen.has(rel)) continue;
       seen.add(rel);
@@ -188,6 +199,9 @@ export function resolveFiles(rootDir, config) {
  * Paths are normalized to forward slashes before matching.
  */
 function globToRegex(pattern) {
+  if (typeof pattern !== 'string' || pattern.length > 200) {
+    throw new Error('glob pattern too long or invalid');
+  }
   let re = '';
   let i = 0;
   while (i < pattern.length) {
@@ -243,6 +257,18 @@ function validateConfig(cfg) {
   }
   if (typeof cfg.insertBefore !== 'string' && typeof cfg.insertAfter !== 'string') {
     throw new Error('config.insertBefore or config.insertAfter (string) required');
+  }
+  for (const f of cfg.files) {
+    if (f.includes('..') || path.isAbsolute(f) || f.length > 200) {
+      throw new Error('config.files entries must be relative, traversal-free, and under 200 chars');
+    }
+  }
+  if (cfg.exclude !== undefined) {
+    for (const f of cfg.exclude) {
+      if (f.includes('..') || path.isAbsolute(f) || f.length > 200) {
+        throw new Error('config.exclude entries must be relative, traversal-free, and under 200 chars');
+      }
+    }
   }
   if (cfg.commentSyntax !== 'html' && cfg.commentSyntax !== 'jsx') {
     throw new Error("config.commentSyntax must be 'html' or 'jsx'");

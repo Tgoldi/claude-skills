@@ -187,7 +187,9 @@ function validateEvent(msg) {
 function createRequestHandler({ detectScript, livePath }) {
   return (req, res) => {
     const url = new URL(req.url, `http://localhost:${state.port}`);
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // This server binds to 127.0.0.1 only (see httpServer.listen below) and
+    // is intended for local development use; no cross-origin browser client
+    // should need to reach it, so we do not send an Allow-Origin header.
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
@@ -458,7 +460,9 @@ function createRequestHandler({ detectScript, livePath }) {
 
     // --- Stop ---
     if (p === '/stop') {
-      const token = url.searchParams.get('token');
+      const authHeader = req.headers['authorization'] || '';
+      const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+      const token = bearerToken || url.searchParams.get('token');
       if (token !== state.token) { res.writeHead(401); res.end('Unauthorized'); return; }
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end('stopping');
@@ -595,7 +599,9 @@ if (args.includes('stop')) {
   const keepInject = args.includes('--keep-inject');
   try {
     const info = JSON.parse(fs.readFileSync(LIVE_PID_FILE, 'utf-8'));
-    const res = await fetch(`http://localhost:${info.port}/stop?token=${info.token}`);
+    const res = await fetch(`http://localhost:${info.port}/stop`, {
+      headers: { Authorization: `Bearer ${info.token}` },
+    });
     if (res.ok) console.log(`Stopped live server on port ${info.port}.`);
   } catch {
     console.log('No running live server found.');
@@ -685,7 +691,6 @@ httpServer.listen(state.port, '127.0.0.1', () => {
   fs.writeFileSync(LIVE_PID_FILE, JSON.stringify({ pid: process.pid, port: state.port, token: state.token }));
   const url = `http://localhost:${state.port}`;
   console.log(`\nImpeccable live server running on ${url}`);
-  console.log(`Token: ${state.token}\n`);
   console.log(`Inject: <script src="${url}/live.js"><\/script>`);
   console.log(`Stop:   node ${path.basename(fileURLToPath(import.meta.url))} stop`);
 });

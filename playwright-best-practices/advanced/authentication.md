@@ -16,8 +16,8 @@
 ```typescript
 // Storage state reuse — the #1 pattern for fast auth
 await page.goto("/login");
-await page.getByLabel("Username").fill("testuser@example.com");
-await page.getByLabel("Password").fill("secretPass123");
+await page.getByLabel("Username").fill(process.env.TEST_USER_EMAIL!);
+await page.getByLabel("Password").fill(process.env.TEST_USER_PASSWORD!);
 await page.getByRole("button", { name: "Log in" }).click();
 await page.context().storageState({ path: ".auth/session.json" });
 
@@ -31,7 +31,7 @@ await page.context().storageState({ path: ".auth/session.json" });
 // API login — skip the UI entirely
 const context = await browser.newContext();
 const response = await context.request.post("/api/auth/login", {
-  data: { email: "testuser@example.com", password: "secretPass123" },
+  data: { email: process.env.TEST_USER_EMAIL!, password: process.env.TEST_USER_PASSWORD! },
 });
 await context.storageState({ path: ".auth/session.json" });
 ```
@@ -55,8 +55,8 @@ async function generateAuthState() {
   const page = await context.newPage();
 
   await page.goto("http://localhost:4000/login");
-  await page.getByLabel("Username").fill("testuser@example.com");
-  await page.getByLabel("Password").fill("secretPass123");
+  await page.getByLabel("Username").fill(process.env.TEST_USER_EMAIL!);
+  await page.getByLabel("Password").fill(process.env.TEST_USER_PASSWORD!);
   await page.getByRole("button", { name: "Log in" }).click();
   await page.waitForURL("/home");
 
@@ -157,7 +157,7 @@ export const test = base.extend<{}, AuthFixtures>({
       await page
         .getByLabel("Username")
         .fill(`worker-${test.info().parallelIndex}@example.com`);
-      await page.getByLabel("Password").fill("secretPass123");
+      await page.getByLabel("Password").fill(process.env.TEST_USER_PASSWORD!);
       await page.getByRole("button", { name: "Log in" }).click();
       await page.waitForURL("/home");
       await page.close();
@@ -435,7 +435,7 @@ import { generateTOTP } from "../helpers/totp";
 test("login with TOTP two-factor auth", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Username").fill("mfa-user@example.com");
-  await page.getByLabel("Password").fill("secretPass123");
+  await page.getByLabel("Password").fill(process.env.TEST_USER_PASSWORD!);
   await page.getByRole("button", { name: "Log in" }).click();
 
   await expect(page.getByText("Enter your authentication code")).toBeVisible();
@@ -580,8 +580,8 @@ test.describe("login page", () => {
 
   test("successful login redirects to home", async ({ page }) => {
     await loginPage.loginAndWaitForHome(
-      "testuser@example.com",
-      "secretPass123"
+      process.env.TEST_USER_EMAIL!,
+      process.env.TEST_USER_PASSWORD!
     );
     await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
   });
@@ -654,8 +654,8 @@ export const test = base.extend({
 
     await apiContext.post("/api/auth/login", {
       data: {
-        email: "testuser@example.com",
-        password: "secretPass123",
+        email: process.env.TEST_USER_EMAIL!,
+        password: process.env.TEST_USER_PASSWORD!,
       },
     });
 
@@ -712,8 +712,8 @@ test.describe("unauthenticated access", () => {
     await page.goto("/signup");
     await page.getByLabel("Name").fill("New User");
     await page.getByLabel("Email").fill(`test-${Date.now()}@example.com`);
-    await page.getByLabel("Password", { exact: true }).fill("secretPass123");
-    await page.getByLabel("Confirm password").fill("secretPass123");
+    await page.getByLabel("Password", { exact: true }).fill(process.env.TEST_USER_PASSWORD!);
+    await page.getByLabel("Confirm password").fill(process.env.TEST_USER_PASSWORD!);
     await page.getByRole("button", { name: "Create account" }).click();
 
     await page.waitForURL("/onboarding");

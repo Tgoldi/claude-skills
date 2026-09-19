@@ -60,7 +60,7 @@ test.describe("Products API", () => {
 
   test.beforeAll(async ({ request }) => {
     const res = await request.post("/api/auth/token", {
-      data: { email: "manager@shop.io", password: "mgr-secret" },
+      data: { email: "manager@shop.io", password: process.env.TEST_MANAGER_PASSWORD },
     });
     token = (await res.json()).accessToken;
   });
@@ -102,7 +102,7 @@ test.describe("Products API", () => {
 
   test("staff role cannot delete products", async ({ request }) => {
     const staffLogin = await request.post("/api/auth/token", {
-      data: { email: "staff@shop.io", password: "staff-pass" },
+      data: { email: "staff@shop.io", password: process.env.TEST_STAFF_PASSWORD },
     });
     const staffToken = (await staffLogin.json()).accessToken;
 

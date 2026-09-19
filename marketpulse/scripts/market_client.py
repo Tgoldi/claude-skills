@@ -55,8 +55,14 @@ class MarketClient:
         data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Make an HTTP request to the AIsa API."""
+        base_hostname = urllib.parse.urlparse(self.BASE_URL).hostname
+        if not endpoint.startswith("/"):
+            raise ValueError("endpoint must be a path starting with '/'")
         url = f"{self.BASE_URL}{endpoint}"
-        
+        parsed_url = urllib.parse.urlparse(url)
+        if parsed_url.hostname != base_hostname or parsed_url.scheme != "https":
+            raise ValueError("Refusing to request a URL outside of the allowed API host")
+
         if params:
             query_string = urllib.parse.urlencode(
                 {k: v for k, v in params.items() if v is not None}
@@ -76,8 +82,11 @@ class MarketClient:
         if method == "POST" and request_data is None:
             request_data = b"{}"
         
+        if parsed_url.hostname != base_hostname or parsed_url.scheme != "https":
+            raise ValueError("Refusing to request a URL outside of the allowed API host")
+
         req = urllib.request.Request(url, data=request_data, headers=headers, method=method)
-        
+
         try:
             with urllib.request.urlopen(req, timeout=60) as response:
                 return json.loads(response.read().decode("utf-8"))

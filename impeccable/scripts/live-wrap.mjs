@@ -117,6 +117,29 @@ The agent should insert variant HTML at insertLine.`);
     matchedQuery = queries[0];
   }
 
+  const projectRoot = process.cwd();
+  const resolvedTargetFile = path.resolve(projectRoot, targetFile);
+  const relativeToRoot = path.relative(projectRoot, resolvedTargetFile);
+  if (relativeToRoot.startsWith('..') || path.isAbsolute(relativeToRoot)) {
+    console.error(JSON.stringify({
+      error: 'path_outside_project',
+      hint: 'Resolved file path escapes the project root and was rejected.',
+    }));
+    process.exit(1);
+  }
+  targetFile = resolvedTargetFile;
+
+  try {
+    const stat = fs.statSync(targetFile);
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+      console.error(JSON.stringify({
+        error: 'not_authorized',
+        hint: 'File is not owned by the invoking user; refusing to modify.',
+      }));
+      process.exit(1);
+    }
+  } catch { /* if stat fails, readFileSync below will surface the error */ }
+
   const content = fs.readFileSync(targetFile, 'utf-8');
   const lines = content.split('\n');
 
@@ -541,10 +564,11 @@ function findClosingLine(lines, start) {
   if (!openMatch) return start; // caller passed a non-opener; nothing to span
 
   const tagName = openMatch[1];
+  const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   let depth = 0;
-  const openRe = new RegExp('<' + tagName + '(?=[\\s/>]|$)', 'g');
-  const selfCloseRe = new RegExp('<' + tagName + '[^>]*/>', 'g');
-  const closeRe = new RegExp('</' + tagName + '\\s*>', 'g');
+  const openRe = new RegExp('<' + escapedTagName + '(?=[\\s/>]|$)', 'g');
+  const selfCloseRe = new RegExp('<' + escapedTagName + '[^>]*/>', 'g');
+  const closeRe = new RegExp('</' + escapedTagName + '\\s*>', 'g');
 
   for (let i = start; i < lines.length; i++) {
     const line = lines[i];

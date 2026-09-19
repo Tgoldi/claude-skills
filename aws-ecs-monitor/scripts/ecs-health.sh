@@ -44,6 +44,25 @@ DOMAIN="${ECS_DOMAIN:-}"
 OUTDIR="${ECS_HEALTH_OUTDIR:-./data}"
 STATUS_FILE="${ECS_HEALTH_STATE:-${OUTDIR}/ecs-health.json}"
 
+if [[ ! "$REGION" =~ ^[a-z0-9-]+$ ]]; then
+  echo "ERROR: Invalid AWS region format: $REGION" >&2
+  exit 2
+fi
+
+if [[ -n "$DOMAIN" ]] && [[ ! "$DOMAIN" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+  echo "ERROR: Invalid domain format: $DOMAIN" >&2
+  exit 2
+fi
+
+if [[ "$OUTDIR" =~ \.\./ ]] || [[ -n "${ECS_HEALTH_OUTDIR:-}" && "$ECS_HEALTH_OUTDIR" == /* && ! "$ECS_HEALTH_OUTDIR" =~ ^/(tmp|var|home|data) ]]; then
+  echo "ERROR: Invalid output directory path: $OUTDIR" >&2
+  exit 2
+fi
+if [[ "$STATUS_FILE" =~ \.\./ ]]; then
+  echo "ERROR: Invalid state file path: $STATUS_FILE" >&2
+  exit 2
+fi
+
 QUIET=false
 JSON_ONLY=false
 for arg in "$@"; do
@@ -109,8 +128,8 @@ OVERALL="healthy"
 # 1. Domain HTTP Check (if ECS_DOMAIN is set)
 # ---------------------------------------------------------------------------
 if [[ -n "$DOMAIN" ]]; then
-  fe_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://$DOMAIN/" 2>/dev/null || echo "000")
-  fe_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 "https://$DOMAIN/" 2>/dev/null || echo "0")
+  fe_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -- "https://${DOMAIN}/" 2>/dev/null || echo "000")
+  fe_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 -- "https://${DOMAIN}/" 2>/dev/null || echo "0")
 
   if [[ "$fe_status" == "200" ]]; then
     echo '{"status":"healthy","http_code":'"$fe_status"',"latency_s":'"$fe_latency"'}' > "$TMPDIR/domain_http.json"
@@ -128,16 +147,53 @@ if [[ -n "${ECS_HTTP_ENDPOINTS:-}" ]]; then
   for ep in "${ENDPOINTS[@]}"; do
     ep_name="${ep%%=*}"
     ep_url="${ep#*=}"
-    ep_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$ep_url" 2>/dev/null || echo "000")
-    ep_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 "$ep_url" 2>/dev/null || echo "0")
+
+    if [[ ! "$ep_url" =~ ^https?:// ]]; then
+      echo "Invalid URL format for endpoint '$ep_name': $ep_url" >&2
+      OVERALL="unhealthy"
+      continue
+    fi
+
+    ep_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -- "$ep_url" 2>/dev/null || echo "000")
+    ep_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 -- "$ep_url" 2>/dev/null || echo "0")
 
     # Any non-zero HTTP response means reachable
     if [[ "$ep_status" != "000" && "$ep_status" != "" ]]; then
-      echo '{"status":"healthy","http_code":'"$ep_status"',"latency_s":'"$ep_latency"',"url":"'"$ep_url"'"}' > "$TMPDIR/http_${ep_name}.json"
+      ep_health="healthy"
+      ep_error=""
     else
-      echo '{"status":"unhealthy","http_code":'"$ep_status"',"latency_s":'"$ep_latency"',"url":"'"$ep_url"'","error":"Unreachable"}' > "$TMPDIR/http_${ep_name}.json"
+      ep_health="unhealthy"
+      ep_error="Unreachable"
       OVERALL="unhealthy"
     fi
+
+    EP_HEALTH="$ep_health" EP_STATUS="$ep_status" EP_LATENCY="$ep_latency" EP_URL="$ep_url" EP_ERROR="$ep_error" \
+      python3 -c "
+import json, os
+
+status = os.environ.get('EP_STATUS', '000')
+try:
+    status_val = int(status)
+except ValueError:
+    status_val = status
+
+try:
+    latency_val = float(os.environ.get('EP_LATENCY', '0'))
+except ValueError:
+    latency_val = 0.0
+
+result = {
+    'status': os.environ.get('EP_HEALTH', 'unhealthy'),
+    'http_code': status_val,
+    'latency_s': latency_val,
+    'url': os.environ.get('EP_URL', ''),
+}
+err = os.environ.get('EP_ERROR', '')
+if err:
+    result['error'] = err
+
+print(json.dumps(result))
+" > "$TMPDIR/http_${ep_name}.json"
   done
 fi
 
@@ -301,7 +357,7 @@ fi
 # 5. SSL Certificate Check (if domain is set)
 # ---------------------------------------------------------------------------
 if [[ -n "$DOMAIN" ]] && command -v openssl &>/dev/null; then
-  ssl_expiry=$(echo | openssl s_client -servername "$DOMAIN" -connect "$DOMAIN:443" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+  ssl_expiry=$(echo | openssl s_client -servername "$DOMAIN" -connect "${DOMAIN}:443" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
   if [[ -n "$ssl_expiry" ]]; then
     ssl_epoch=$(date -d "$ssl_expiry" +%s 2>/dev/null || echo "0")
     ssl_days_left=$(( (ssl_epoch - NOW) / 86400 ))
@@ -322,10 +378,10 @@ fi
 # ---------------------------------------------------------------------------
 # Build Final JSON
 # ---------------------------------------------------------------------------
-FINAL_JSON=$(python3 -c "
+FINAL_JSON=$(TMPDIR="$TMPDIR" NOW_ISO="$NOW_ISO" NOW="$NOW" OVERALL="$OVERALL" CLUSTER="$CLUSTER" REGION="$REGION" DOMAIN="$DOMAIN" python3 -c "
 import json, os, glob
 
-tmpdir = '$TMPDIR'
+tmpdir = os.environ['TMPDIR']
 checks = {}
 for f in glob.glob(os.path.join(tmpdir, '*.json')):
     name = os.path.splitext(os.path.basename(f))[0]
@@ -333,16 +389,16 @@ for f in glob.glob(os.path.join(tmpdir, '*.json')):
         checks[name] = json.load(fh)
 
 result = {
-    'timestamp': '$NOW_ISO',
-    'epoch': $NOW,
-    'overall': '$OVERALL',
-    'cluster': '$CLUSTER',
-    'region': '$REGION',
+    'timestamp': os.environ['NOW_ISO'],
+    'epoch': int(os.environ['NOW']),
+    'overall': os.environ['OVERALL'],
+    'cluster': os.environ['CLUSTER'],
+    'region': os.environ['REGION'],
     'checks': checks
 }
 
 # Include domain if configured
-domain = '$DOMAIN'
+domain = os.environ.get('DOMAIN', '')
 if domain:
     result['domain'] = domain
 

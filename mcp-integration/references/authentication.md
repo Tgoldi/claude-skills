@@ -98,7 +98,7 @@ Most common for HTTP and WebSocket servers.
 
 **Environment variable:**
 ```bash
-export API_TOKEN="your-secret-token-here"
+export API_TOKEN="${API_TOKEN}"
 ```
 
 ### API Keys
@@ -196,7 +196,7 @@ For stdio servers, pass credentials via environment variables:
 # User sets these in their shell
 export DATABASE_URL="postgresql://localhost/mydb"
 export DB_USER="myuser"
-export DB_PASSWORD="mypassword"
+# DB_PASSWORD is set via environment/secrets manager, not hardcoded here
 ```
 
 ### Documentation Template
@@ -209,7 +209,7 @@ Set these environment variables:
 \`\`\`bash
 export DATABASE_URL="postgresql://host:port/database"
 export DB_USER="username"
-export DB_PASSWORD="password"
+# DB_PASSWORD is set via environment/secrets manager, not hardcoded here
 \`\`\`
 
 Or create a `.env` file (add to `.gitignore`):
@@ -217,7 +217,7 @@ Or create a `.env` file (add to `.gitignore`):
 \`\`\`
 DATABASE_URL=postgresql://localhost:5432/mydb
 DB_USER=myuser
-DB_PASSWORD=mypassword
+DB_PASSWORD=${DB_PASSWORD}
 \`\`\`
 
 Load with: \`source .env\` or \`export $(cat .env | xargs)\`

@@ -51,7 +51,12 @@ Options:
   }
 
   const info = readServerInfo();
-  const base = `http://localhost:${info.port}`;
+  const port = Number(info.port);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    console.error('Invalid server port recorded in .impeccable-live.json.');
+    process.exit(1);
+  }
+  const base = `http://localhost:${port}`;
 
   // Reply mode: npx impeccable poll --reply <id> <status> [--file path] [message]
   const replyIdx = args.indexOf('--reply');
@@ -116,7 +121,9 @@ Options:
         break;
       }
       const slice = Math.min(remaining, PER_REQUEST_TIMEOUT_MS);
-      const res = await fetch(`${base}/poll?token=${info.token}&timeout=${slice}`);
+      const res = await fetch(`${base}/poll?timeout=${slice}`, {
+        headers: { Authorization: `Bearer ${info.token}` },
+      });
 
       if (res.status === 401) {
         console.error('Authentication failed. The server token may have changed.');

@@ -450,13 +450,13 @@ class SecurePasswordHasher:
 hasher = SecurePasswordHasher()
 
 # During registration
-password = "user_password_123!"
+password = os.environ["EXAMPLE_USER_PASSWORD"]
 password_hash = hasher.hash_password(password)
 # Store password_hash in database
 
 # During login
 stored_hash = password_hash  # From database
-if hasher.verify_password("user_password_123!", stored_hash):
+if hasher.verify_password(password, stored_hash):
     print("Login successful")
 
     # Check if hash needs upgrading
