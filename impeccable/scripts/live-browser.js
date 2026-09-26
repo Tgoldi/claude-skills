@@ -197,6 +197,14 @@
 
   function id8() { return crypto.randomUUID().replace(/-/g, '').slice(0, 8); }
 
+  // Parses a trusted, statically-defined SVG markup string (never user
+  // input) into a DOM node via DOMParser, avoiding innerHTML assignment.
+  function parseSvgMarkup(svgString) {
+    const doc = new DOMParser().parseFromString(svgString, 'image/svg+xml');
+    const node = doc.documentElement;
+    return document.importNode(node, true);
+  }
+
   // Modal-aware chrome: keep our floating UI clickable inside Radix /
   // Headless UI / vaul portals.
   //
@@ -1114,7 +1122,7 @@
         transition: 'color 0.12s ease, background 0.12s ease',
         whiteSpace: 'nowrap',
       });
-      tune.innerHTML = TUNE_ICON_SVG;
+      tune.appendChild(parseSvgMarkup(TUNE_ICON_SVG));
       const tuneLabel = document.createElement('span');
       tuneLabel.textContent = 'Tune';
       tune.appendChild(tuneLabel);
@@ -1352,7 +1360,8 @@
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         height: '20px', opacity: '0.9',
       });
-      iconWrap.innerHTML = ICONS[action.value] || '';
+      const iconMarkup = ICONS[action.value];
+      if (iconMarkup) iconWrap.appendChild(parseSvgMarkup(iconMarkup));
       const labelEl = el('span', { lineHeight: '1' });
       labelEl.textContent = action.label;
       chip.appendChild(iconWrap);
@@ -4274,7 +4283,13 @@ void main() {
 
       const meta = document.createElement('div');
       meta.className = 'tile-meta';
-      meta.innerHTML = `<span class="name">${escapeHtml(c.name || c.role || 'Color')}</span><span>${escapeHtml(c.value || '')}</span>`;
+      const metaNameSpan = document.createElement('span');
+      metaNameSpan.className = 'name';
+      metaNameSpan.textContent = c.name || c.role || 'Color';
+      const metaValueSpan = document.createElement('span');
+      metaValueSpan.textContent = c.value || '';
+      meta.appendChild(metaNameSpan);
+      meta.appendChild(metaValueSpan);
       tile.appendChild(meta);
 
       const hero = document.createElement('div');
@@ -4317,7 +4332,12 @@ void main() {
 
       const meta = document.createElement('div');
       meta.className = 'tile-meta';
-      meta.innerHTML = `<span>${escapeHtml(t.role || '')}</span><span>${escapeHtml(t.weight || '')} ${escapeHtml(t.style === 'italic' ? 'italic' : '')}</span>`;
+      const roleSpan = document.createElement('span');
+      roleSpan.textContent = t.role || '';
+      const weightSpan = document.createElement('span');
+      weightSpan.textContent = (t.weight || '') + ' ' + (t.style === 'italic' ? 'italic' : '');
+      meta.appendChild(roleSpan);
+      meta.appendChild(weightSpan);
       tile.appendChild(meta);
 
       const specimen = document.createElement('div');
@@ -4401,7 +4421,13 @@ void main() {
 
       const meta = document.createElement('div');
       meta.className = 'tile-meta';
-      meta.innerHTML = `<span class="name">${escapeHtml(sh.name || 'Shadow')}</span><span>Elevation</span>`;
+      const shNameSpan = document.createElement('span');
+      shNameSpan.className = 'name';
+      shNameSpan.textContent = sh.name || 'Shadow';
+      const shElevSpan = document.createElement('span');
+      shElevSpan.textContent = 'Elevation';
+      meta.appendChild(shNameSpan);
+      meta.appendChild(shElevSpan);
       tile.appendChild(meta);
 
       const surface = document.createElement('div');

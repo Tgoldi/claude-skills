@@ -117,6 +117,25 @@ The agent should insert variant HTML at insertLine.`);
     matchedQuery = queries[0];
   }
 
+  {
+    const projectRoot = fs.realpathSync(process.cwd());
+    const resolvedTarget = path.resolve(process.cwd(), targetFile);
+    if (!fs.existsSync(resolvedTarget)) {
+      console.error(JSON.stringify({ error: 'file_not_found', file: targetFile }));
+      process.exit(1);
+    }
+    const realTarget = fs.realpathSync(resolvedTarget);
+    if (!realTarget.startsWith(projectRoot + path.sep)) {
+      console.error(JSON.stringify({ error: 'file_outside_project', file: targetFile }));
+      process.exit(1);
+    }
+    if (!EXTENSIONS.includes(path.extname(realTarget))) {
+      console.error(JSON.stringify({ error: 'invalid_file_type', file: targetFile }));
+      process.exit(1);
+    }
+    targetFile = realTarget;
+  }
+
   const content = fs.readFileSync(targetFile, 'utf-8');
   const lines = content.split('\n');
 
@@ -371,6 +390,9 @@ function searchDir(dir, query, seen, depth, genOpts) {
     const filePath = path.join(dir, entry.name);
     if (!genOpts.includeGenerated && isGeneratedFile(filePath, genOpts)) continue;
     try {
+      const realFile = fs.realpathSync(filePath);
+      const realRoot = fs.realpathSync(process.cwd());
+      if (!realFile.startsWith(realRoot + path.sep)) continue;
       const content = fs.readFileSync(filePath, 'utf-8');
       if (content.includes(query)) return filePath;
     } catch { /* skip unreadable files */ }

@@ -265,13 +265,14 @@ app.include_router(router, prefix="/api")
 async def health_check():
     return {{"status": "healthy"}}
 ''',
-        "config.py": '''from pydantic_settings import BaseSettings
+        "config.py": '''import os
+from pydantic_settings import BaseSettings
 from typing import List
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://user:pass@localhost:5432/db"
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
-    SECRET_KEY: str = "change-me-in-production"
+    SECRET_KEY: str = os.environ["SECRET_KEY"]
 
     class Config:
         env_file = ".env"
@@ -363,7 +364,7 @@ app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
         "config.ts": '''export const config = {
   PORT: parseInt(process.env.PORT || "8000"),
   MONGODB_URI: process.env.MONGODB_URI || "mongodb://localhost:27017/app",
-  JWT_SECRET: process.env.JWT_SECRET || "change-me",
+  JWT_SECRET: process.env.JWT_SECRET!,
 };
 ''',
         "database.ts": '''import mongoose from "mongoose";

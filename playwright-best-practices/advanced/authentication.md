@@ -654,8 +654,8 @@ export const test = base.extend({
 
     await apiContext.post("/api/auth/login", {
       data: {
-        email: "testuser@example.com",
-        password: "secretPass123",
+        email: process.env.TEST_USER_EMAIL!,
+        password: process.env.TEST_USER_PASSWORD!,
       },
     });
 

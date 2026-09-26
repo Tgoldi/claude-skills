@@ -116,7 +116,9 @@ Options:
         break;
       }
       const slice = Math.min(remaining, PER_REQUEST_TIMEOUT_MS);
-      const res = await fetch(`${base}/poll?token=${info.token}&timeout=${slice}`);
+      const res = await fetch(`${base}/poll?timeout=${slice}`, {
+        headers: { Authorization: `Bearer ${info.token}` },
+      });
 
       if (res.status === 401) {
         console.error('Authentication failed. The server token may have changed.');
@@ -146,6 +148,14 @@ Options:
         ? ['--id', event.id, '--discard']
         : ['--id', event.id, '--variant', event.variantId];
       if (event.type === 'accept' && event.paramValues && Object.keys(event.paramValues).length > 0) {
+        if (typeof event.paramValues !== 'object' || Array.isArray(event.paramValues)) {
+          throw new Error('Invalid param values');
+        }
+        for (const [k, v] of Object.entries(event.paramValues)) {
+          if (typeof v !== 'string' || /[\x00-\x1f]/.test(v) || /[\x00-\x1f]/.test(k)) {
+            throw new Error('Invalid param value');
+          }
+        }
         scriptArgs.push('--param-values', JSON.stringify(event.paramValues));
       }
       try {

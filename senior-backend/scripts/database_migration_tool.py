@@ -92,8 +92,18 @@ class SQLParser:
         re.IGNORECASE
     )
 
+    # Maximum schema file size (in characters) accepted for parsing, to avoid
+    # excessive regex work on very large / adversarial inputs.
+    MAX_SQL_LENGTH = 2_000_000
+
     def parse(self, sql: str) -> Dict[str, Table]:
         """Parse SQL and return table definitions."""
+        if len(sql) > self.MAX_SQL_LENGTH:
+            raise ValueError(
+                f"Schema file too large to parse safely "
+                f"({len(sql)} chars > {self.MAX_SQL_LENGTH} limit)"
+            )
+
         tables = {}
 
         # Parse CREATE TABLE statements
@@ -560,9 +570,23 @@ class DatabaseMigrationTool:
                  output_dir: Optional[str] = None, verbose: bool = False):
         self.schema_path = Path(schema_path)
         self.compare_path = Path(compare_path) if compare_path else None
-        self.output_dir = Path(output_dir) if output_dir else None
+        self.output_dir = self._validate_output_dir(output_dir) if output_dir else None
         self.verbose = verbose
         self.parser = SQLParser()
+
+    @staticmethod
+    def _validate_output_dir(output_dir: str) -> Path:
+        """Resolve and validate the output directory is contained within
+        the current working directory (the allow-listed base path)."""
+        base = Path.cwd().resolve()
+        resolved = (base / output_dir).resolve()
+        try:
+            resolved.relative_to(base)
+        except ValueError:
+            raise ValueError(
+                f"Output directory '{output_dir}' must be within '{base}'"
+            )
+        return resolved
 
     def run(self, mode: str = 'analyze') -> Dict:
         """Execute the tool in specified mode."""

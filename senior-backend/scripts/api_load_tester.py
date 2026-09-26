@@ -94,13 +94,8 @@ class HTTPClient:
         self.headers = headers or {}
         self.verify_ssl = verify_ssl
 
-        # Create SSL context
-        if not verify_ssl:
-            self.ssl_context = ssl.create_default_context()
-            self.ssl_context.check_hostname = False
-            self.ssl_context.verify_mode = ssl.CERT_NONE
-        else:
-            self.ssl_context = None
+        # Create SSL context (always verified; insecure bypass removed)
+        self.ssl_context = ssl.create_default_context()
 
     def request(self, url: str, method: str = 'GET', body: Optional[bytes] = None) -> RequestResult:
         """Execute HTTP request and return result."""

@@ -143,6 +143,27 @@ const VISUAL_ACTIONS = [
 const ID_PATTERN = /^[0-9a-f]{8}$/;
 const VARIANT_ID_PATTERN = /^[0-9]{1,3}$/;
 
+// /source is restricted to reading files with these extensions, under the
+// project root, so it can't be used to exfiltrate arbitrary files (env
+// files, credentials, etc.) even with a valid session token.
+const SOURCE_ALLOWED_EXTENSIONS = new Set(['.html', '.htm', '.js', '.jsx', '.ts', '.tsx', '.css', '.vue', '.svelte']);
+
+// Simple fixed-window rate limiter for the /events POST endpoint, keyed by
+// the session token (the only identity we have — this server only ever
+// talks to one browser session at a time).
+const EVENTS_RATE_LIMIT = 10;       // max events
+const EVENTS_RATE_WINDOW_MS = 1000; // per this many ms
+const eventsRateState = { windowStart: 0, count: 0 };
+function isEventsRateLimited() {
+  const now = Date.now();
+  if (now - eventsRateState.windowStart >= EVENTS_RATE_WINDOW_MS) {
+    eventsRateState.windowStart = now;
+    eventsRateState.count = 0;
+  }
+  eventsRateState.count += 1;
+  return eventsRateState.count > EVENTS_RATE_LIMIT;
+}
+
 function isValidId(v) { return typeof v === 'string' && ID_PATTERN.test(v); }
 function isValidVariantId(v) { return typeof v === 'string' && VARIANT_ID_PATTERN.test(v); }
 
@@ -187,7 +208,11 @@ function validateEvent(msg) {
 function createRequestHandler({ detectScript, livePath }) {
   return (req, res) => {
     const url = new URL(req.url, `http://localhost:${state.port}`);
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // This server only ever needs to be reachable from the page it injected
+    // live.js into, which loads it from this same host:port. Scope CORS to
+    // that origin instead of allowing any site to read responses.
+    res.setHeader('Access-Control-Allow-Origin', `http://localhost:${state.port}`);
+    res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
@@ -383,7 +408,11 @@ function createRequestHandler({ detectScript, livePath }) {
       const filePath = url.searchParams.get('path');
       if (!filePath || filePath.includes('..')) { res.writeHead(400); res.end('Bad path'); return; }
       const absPath = path.resolve(process.cwd(), filePath);
-      if (!absPath.startsWith(process.cwd())) { res.writeHead(403); res.end('Forbidden'); return; }
+      const cwdPrefix = process.cwd() + path.sep;
+      if (!absPath.startsWith(cwdPrefix)) { res.writeHead(403); res.end('Forbidden'); return; }
+      if (!SOURCE_ALLOWED_EXTENSIONS.has(path.extname(absPath).toLowerCase())) {
+        res.writeHead(403); res.end('Forbidden file type'); return;
+      }
       let content;
       try { content = fs.readFileSync(absPath, 'utf-8'); }
       catch { res.writeHead(404); res.end('File not found'); return; }
@@ -443,6 +472,11 @@ function createRequestHandler({ detectScript, livePath }) {
           res.end(JSON.stringify({ error: 'Unauthorized' }));
           return;
         }
+        if (isEventsRateLimited()) {
+          res.writeHead(429, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Too many requests' }));
+          return;
+        }
         const error = validateEvent(msg);
         if (error) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -491,7 +525,8 @@ function handlePollGet(req, res, url) {
     res.end(JSON.stringify({ error: 'Unauthorized' }));
     return;
   }
-  const timeout = parseInt(url.searchParams.get('timeout') || DEFAULT_POLL_TIMEOUT, 10);
+  const rawTimeout = parseInt(url.searchParams.get('timeout') || DEFAULT_POLL_TIMEOUT, 10);
+  const timeout = Math.min(Math.max(Number.isFinite(rawTimeout) ? rawTimeout : DEFAULT_POLL_TIMEOUT, 1000), 600000);
   if (state.pendingEvents.length > 0) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(state.pendingEvents.shift()));
@@ -682,7 +717,11 @@ const { detectScript, livePath } = loadBrowserScripts();
 httpServer = http.createServer(createRequestHandler({ detectScript, livePath }));
 
 httpServer.listen(state.port, '127.0.0.1', () => {
-  fs.writeFileSync(LIVE_PID_FILE, JSON.stringify({ pid: process.pid, port: state.port, token: state.token }));
+  fs.writeFileSync(
+    LIVE_PID_FILE,
+    JSON.stringify({ pid: process.pid, port: state.port, token: state.token }),
+    { mode: 0o600 }
+  );
   const url = `http://localhost:${state.port}`;
   console.log(`\nImpeccable live server running on ${url}`);
   console.log(`Token: ${state.token}\n`);

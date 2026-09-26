@@ -260,9 +260,9 @@ e2e:integration:
       alias: cache
   variables:
     CI: "true"
-    DATABASE_URL: "postgresql://postgres:postgres@db:5432/testdb"
+    DATABASE_URL: $DATABASE_URL
     REDIS_URL: "redis://cache:6379"
-    POSTGRES_PASSWORD: "postgres"
+    POSTGRES_PASSWORD: $POSTGRES_PASSWORD
     POSTGRES_DB: "testdb"
   before_script:
     - npm ci
@@ -379,7 +379,7 @@ services:
     alias: db
 
 variables:
-  DATABASE_URL: "postgresql://postgres:postgres@db:5432/testdb"
+  DATABASE_URL: $DATABASE_URL
 ```
 
 ### Merged report is empty after sharded run

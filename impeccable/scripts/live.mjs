@@ -93,7 +93,6 @@ The agent should then:
   console.log(JSON.stringify({
     ok: true,
     serverPort: serverInfo.port,
-    serverToken: serverInfo.token,
     pageFiles: resolvedFiles,
     configDrift: drift,
     hasProduct: ctx.hasProduct,

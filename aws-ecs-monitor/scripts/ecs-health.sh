@@ -39,10 +39,30 @@ if [[ -z "${ECS_CLUSTER:-}" ]]; then
 fi
 
 CLUSTER="${ECS_CLUSTER}"
+if [[ ! $CLUSTER =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo "ERROR: Invalid ECS_CLUSTER value" >&2
+  exit 2
+fi
 REGION="${ECS_REGION:-us-east-1}"
+if [[ ! $REGION =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo "ERROR: Invalid ECS_REGION value" >&2
+  exit 2
+fi
 DOMAIN="${ECS_DOMAIN:-}"
+if [[ -n "$DOMAIN" && ! $DOMAIN =~ ^[a-zA-Z0-9.-]+$ ]]; then
+  echo "ERROR: Invalid ECS_DOMAIN value" >&2
+  exit 2
+fi
 OUTDIR="${ECS_HEALTH_OUTDIR:-./data}"
+if [[ "$OUTDIR" =~ \.\./ ]]; then
+  echo "ERROR: Invalid output directory" >&2
+  exit 2
+fi
 STATUS_FILE="${ECS_HEALTH_STATE:-${OUTDIR}/ecs-health.json}"
+if [[ "$STATUS_FILE" =~ \.\./ ]]; then
+  echo "ERROR: Invalid status file path" >&2
+  exit 2
+fi
 
 QUIET=false
 JSON_ONLY=false
@@ -109,13 +129,16 @@ OVERALL="healthy"
 # 1. Domain HTTP Check (if ECS_DOMAIN is set)
 # ---------------------------------------------------------------------------
 if [[ -n "$DOMAIN" ]]; then
-  fe_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://$DOMAIN/" 2>/dev/null || echo "000")
-  fe_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 "https://$DOMAIN/" 2>/dev/null || echo "0")
+  fe_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://${DOMAIN}/" 2>/dev/null || echo "000")
+  fe_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 "https://${DOMAIN}/" 2>/dev/null || echo "0")
 
   if [[ "$fe_status" == "200" ]]; then
-    echo '{"status":"healthy","http_code":'"$fe_status"',"latency_s":'"$fe_latency"'}' > "$TMPDIR/domain_http.json"
+    jq -n --arg status healthy --arg code "$fe_status" --arg latency "$fe_latency" \
+      '{status: $status, http_code: ($code | tonumber), latency_s: ($latency | tonumber)}' > "$TMPDIR/domain_http.json"
   else
-    echo '{"status":"unhealthy","http_code":'"$fe_status"',"latency_s":'"$fe_latency"',"error":"Expected 200, got '"$fe_status"'"}' > "$TMPDIR/domain_http.json"
+    jq -n --arg status unhealthy --arg code "$fe_status" --arg latency "$fe_latency" \
+      --arg error "Expected 200, got $fe_status" \
+      '{status: $status, http_code: ($code | tonumber), latency_s: ($latency | tonumber), error: $error}' > "$TMPDIR/domain_http.json"
     OVERALL="unhealthy"
   fi
 fi
@@ -128,14 +151,33 @@ if [[ -n "${ECS_HTTP_ENDPOINTS:-}" ]]; then
   for ep in "${ENDPOINTS[@]}"; do
     ep_name="${ep%%=*}"
     ep_url="${ep#*=}"
-    ep_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$ep_url" 2>/dev/null || echo "000")
-    ep_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 "$ep_url" 2>/dev/null || echo "0")
+
+    if [[ ! $ep_url =~ ^https?://[a-zA-Z0-9.-]+(:[0-9]+)?(/[a-zA-Z0-9._~%!$&\'\(\)*+,;=:@/-]*)?$ ]]; then
+      echo "WARNING: Skipping invalid endpoint URL for $ep_name" >&2
+      jq -n --arg status error --arg url "$ep_url" --arg error "Invalid URL" \
+        '{status: $status, url: $url, error: $error}' > "$TMPDIR/http_${ep_name}.json"
+      OVERALL="unhealthy"
+      continue
+    fi
+
+    if [[ $ep_url =~ ^https?://(169\.254|127\.|localhost|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|0\.0\.0\.0|\[::1\]|\[fe80:) ]]; then
+      echo "WARNING: Skipping private/internal endpoint URL for $ep_name" >&2
+      jq -n --arg status error --arg url "$ep_url" --arg error "Private IP not allowed" \
+        '{status: $status, url: $url, error: $error}' > "$TMPDIR/http_${ep_name}.json"
+      OVERALL="unhealthy"
+      continue
+    fi
+
+    ep_status=$(curl --url "$ep_url" -s -o /dev/null -w "%{http_code}" --max-time 10 2>/dev/null || echo "000")
+    ep_latency=$(curl --url "$ep_url" -s -o /dev/null -w "%{time_total}" --max-time 10 2>/dev/null || echo "0")
 
     # Any non-zero HTTP response means reachable
     if [[ "$ep_status" != "000" && "$ep_status" != "" ]]; then
-      echo '{"status":"healthy","http_code":'"$ep_status"',"latency_s":'"$ep_latency"',"url":"'"$ep_url"'"}' > "$TMPDIR/http_${ep_name}.json"
+      jq -n --arg status healthy --arg code "$ep_status" --arg latency "$ep_latency" --arg url "$ep_url" \
+        '{status: $status, http_code: ($code | tonumber), latency_s: ($latency | tonumber), url: $url}' > "$TMPDIR/http_${ep_name}.json"
     else
-      echo '{"status":"unhealthy","http_code":'"$ep_status"',"latency_s":'"$ep_latency"',"url":"'"$ep_url"'","error":"Unreachable"}' > "$TMPDIR/http_${ep_name}.json"
+      jq -n --arg status unhealthy --arg code "$ep_status" --arg latency "$ep_latency" --arg url "$ep_url" --arg error "Unreachable" \
+        '{status: $status, http_code: ($code | tonumber), latency_s: ($latency | tonumber), url: $url, error: $error}' > "$TMPDIR/http_${ep_name}.json"
       OVERALL="unhealthy"
     fi
   done
@@ -222,11 +264,13 @@ fi
 # ---------------------------------------------------------------------------
 # 4. ALB Target Group Health
 # ---------------------------------------------------------------------------
-alb_result=$(python3 -c "
-import json, subprocess, sys
+alb_result=$(REGION="$REGION" python3 -c "
+import json, os, subprocess, sys
+
+REGION = os.environ['REGION']
 
 tg_result = subprocess.run(
-    ['aws', 'elbv2', 'describe-target-groups', '--region', '$REGION', '--output', 'json'],
+    ['aws', 'elbv2', 'describe-target-groups', '--region', REGION, '--output', 'json'],
     capture_output=True, text=True
 )
 if tg_result.returncode != 0:
@@ -243,7 +287,7 @@ for tg in tgs:
 
     health_result = subprocess.run(
         ['aws', 'elbv2', 'describe-target-health', '--target-group-arn', arn,
-         '--region', '$REGION', '--output', 'json'],
+         '--region', REGION, '--output', 'json'],
         capture_output=True, text=True
     )
     if health_result.returncode != 0:

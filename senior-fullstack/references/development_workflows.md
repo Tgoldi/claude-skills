@@ -35,7 +35,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=postgresql://user:pass@db:5432/app
+      - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=redis://redis:6379
     depends_on:
       - db
@@ -97,13 +97,13 @@ CMD ["node", "dist/index.js"]
 
 ```bash
 # .env.local (development)
-DATABASE_URL="postgresql://user:pass@localhost:5432/app_dev"
+DATABASE_URL="${DATABASE_URL}"
 REDIS_URL="redis://localhost:6379"
-JWT_SECRET="development-secret-change-in-prod"
+JWT_SECRET="${JWT_SECRET}"
 LOG_LEVEL="debug"
 
 # .env.test
-DATABASE_URL="postgresql://user:pass@localhost:5432/app_test"
+DATABASE_URL="${DATABASE_URL}"
 LOG_LEVEL="error"
 
 # .env.production (via secrets management)

@@ -30,7 +30,20 @@ const MARKER_CLOSE_TEXT = 'impeccable-live-end';
 const HARD_EXCLUDES = [
   '**/node_modules/**',
   '**/.git/**',
+  '**/.env*',
+  '**/*.key',
+  '**/*.pem',
+  '**/secrets*',
+  '**/.aws/**',
+  '**/.ssh/**',
 ];
+
+/**
+ * Only these extensions may be targeted by glob patterns in config.files.
+ * This keeps the injector scoped to markup/component entry points and
+ * prevents globs from being used to read arbitrary files off disk.
+ */
+const SAFE_EXTS = ['.html', '.jsx', '.tsx', '.vue', '.svelte', '.astro'];
 
 export async function injectCli() {
   const args = process.argv.slice(2);
@@ -161,6 +174,9 @@ export function resolveFiles(rootDir, config) {
       }
       continue;
     }
+    if (!SAFE_EXTS.some((ext) => pat.toLowerCase().includes(ext))) {
+      throw new Error(`Glob pattern must target safe file types (${SAFE_EXTS.join(', ')}): ${pat}`);
+    }
     let matches;
     try {
       matches = fs.globSync(pat, { cwd: rootDir, withFileTypes: true });
@@ -171,6 +187,10 @@ export function resolveFiles(rootDir, config) {
       if (!ent.isFile || !ent.isFile()) continue;
       const abs = path.join(ent.parentPath || ent.path || rootDir, ent.name);
       const rel = path.relative(rootDir, abs).split(path.sep).join('/');
+      // Reject anything that escapes rootDir (path traversal via `..`) or
+      // that isn't a safe extension, even if the glob somehow matched it.
+      if (rel.startsWith('..') || path.isAbsolute(rel)) continue;
+      if (!SAFE_EXTS.some((ext) => rel.toLowerCase().endsWith(ext))) continue;
       if (isExcluded(rel)) continue;
       if (seen.has(rel)) continue;
       seen.add(rel);
