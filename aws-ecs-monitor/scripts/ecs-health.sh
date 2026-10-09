@@ -41,6 +41,19 @@ fi
 CLUSTER="${ECS_CLUSTER}"
 REGION="${ECS_REGION:-us-east-1}"
 DOMAIN="${ECS_DOMAIN:-}"
+
+if [[ ! "$REGION" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]]; then
+  echo "ERROR: invalid ECS_REGION" >&2
+  exit 2
+fi
+if [[ ! "$CLUSTER" =~ ^[A-Za-z0-9_-]{1,255}$ ]]; then
+  echo "ERROR: invalid ECS_CLUSTER" >&2
+  exit 2
+fi
+if [[ -n "$DOMAIN" && ! "$DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+  echo "ERROR: invalid ECS_DOMAIN" >&2
+  exit 2
+fi
 OUTDIR="${ECS_HEALTH_OUTDIR:-./data}"
 STATUS_FILE="${ECS_HEALTH_STATE:-${OUTDIR}/ecs-health.json}"
 
@@ -128,16 +141,34 @@ if [[ -n "${ECS_HTTP_ENDPOINTS:-}" ]]; then
   for ep in "${ENDPOINTS[@]}"; do
     ep_name="${ep%%=*}"
     ep_url="${ep#*=}"
-    ep_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$ep_url" 2>/dev/null || echo "000")
-    ep_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 "$ep_url" 2>/dev/null || echo "0")
+    if [[ ! "$ep_name" =~ ^[A-Za-z0-9_-]+$ ]]; then
+      echo "Skipping endpoint with invalid name" >&2
+      continue
+    fi
+    if [[ ! "$ep_url" =~ ^https://[A-Za-z0-9._~:/?#@!\$\&\'\(\)*+=%-]+$ ]]; then
+      echo "Skipping endpoint '$ep_name': URL must be https:// with safe characters" >&2
+      continue
+    fi
+    ep_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 --proto '=https' "$ep_url" 2>/dev/null || echo "000")
+    ep_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 --proto '=https' "$ep_url" 2>/dev/null || echo "0")
 
     # Any non-zero HTTP response means reachable
     if [[ "$ep_status" != "000" && "$ep_status" != "" ]]; then
-      echo '{"status":"healthy","http_code":'"$ep_status"',"latency_s":'"$ep_latency"',"url":"'"$ep_url"'"}' > "$TMPDIR/http_${ep_name}.json"
+      ep_state="healthy"
+      ep_err=""
     else
-      echo '{"status":"unhealthy","http_code":'"$ep_status"',"latency_s":'"$ep_latency"',"url":"'"$ep_url"'","error":"Unreachable"}' > "$TMPDIR/http_${ep_name}.json"
+      ep_state="unhealthy"
+      ep_err="Unreachable"
       OVERALL="unhealthy"
     fi
+    python3 -c '
+import json, sys
+status, code, lat, url, err = sys.argv[1:6]
+d = {"status": status, "http_code": int(code), "latency_s": float(lat), "url": url}
+if err:
+    d["error"] = err
+print(json.dumps(d))
+' "$ep_state" "$ep_status" "$ep_latency" "$ep_url" "$ep_err" > "$TMPDIR/http_${ep_name}.json"
   done
 fi
 
@@ -225,8 +256,10 @@ fi
 alb_result=$(python3 -c "
 import json, subprocess, sys
 
+REGION = sys.argv[1]
+
 tg_result = subprocess.run(
-    ['aws', 'elbv2', 'describe-target-groups', '--region', '$REGION', '--output', 'json'],
+    ['aws', 'elbv2', 'describe-target-groups', '--region', REGION, '--output', 'json'],
     capture_output=True, text=True
 )
 if tg_result.returncode != 0:
@@ -243,7 +276,7 @@ for tg in tgs:
 
     health_result = subprocess.run(
         ['aws', 'elbv2', 'describe-target-health', '--target-group-arn', arn,
-         '--region', '$REGION', '--output', 'json'],
+         '--region', REGION, '--output', 'json'],
         capture_output=True, text=True
     )
     if health_result.returncode != 0:
@@ -282,7 +315,7 @@ if issues:
     result['issues'] = issues
 
 print(json.dumps(result))
-" 2>/dev/null)
+" "$REGION" 2>/dev/null)
 
 if [[ -n "$alb_result" ]]; then
   echo "$alb_result" > "$TMPDIR/alb_targets.json"
@@ -393,7 +426,10 @@ fi
 # Write alert marker on failure (for external consumers)
 if ! $QUIET && [[ "$OVERALL" != "healthy" ]]; then
   alert_file="${OUTDIR}/ecs-health-alert.json"
-  echo "{\"timestamp\":\"$NOW_ISO\",\"cluster\":\"$CLUSTER\",\"overall\":\"$OVERALL\"}" > "$alert_file"
+  python3 -c '
+import json, sys
+print(json.dumps({"timestamp": sys.argv[1], "cluster": sys.argv[2], "overall": sys.argv[3]}))
+' "$NOW_ISO" "$CLUSTER" "$OVERALL" > "$alert_file"
 
   # Auto-diagnose via log analyzer if available
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -404,12 +440,13 @@ if ! $QUIET && [[ "$OVERALL" != "healthy" ]]; then
     if [[ -n "$LOG_ANALYSIS" ]]; then
       python3 -c "
 import json, sys
-with open('$alert_file') as f:
+path = sys.argv[1]
+with open(path) as f:
     alert = json.load(f)
 alert['log_analysis'] = sys.stdin.read().strip()
-with open('$alert_file', 'w') as f:
+with open(path, 'w') as f:
     json.dump(alert, f, indent=2)
-" <<< "$LOG_ANALYSIS" 2>/dev/null || true
+" "$alert_file" <<< "$LOG_ANALYSIS" 2>/dev/null || true
     fi
   fi
 fi

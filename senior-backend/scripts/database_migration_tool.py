@@ -67,17 +67,23 @@ class Issue:
 class SQLParser:
     """Parse SQL DDL statements."""
 
-    # Common patterns
-    CREATE_TABLE_PATTERN = re.compile(
-        r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)["`]?\s*\((.*?)\)\s*;',
-        re.IGNORECASE | re.DOTALL
+    # Maximum SQL input size accepted by the parser (defense in depth)
+    MAX_SQL_BYTES = 5 * 1024 * 1024
+
+    # Head-only patterns, matched at the start of a single (already isolated)
+    # statement. No lazy wildcards, so matching is linear.
+    CREATE_TABLE_HEAD = re.compile(
+        r'\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)["`]?\s*\(',
+        re.IGNORECASE
     )
 
-    CREATE_INDEX_PATTERN = re.compile(
-        r'CREATE\s+(UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)["`]?\s+'
-        r'ON\s+["`]?(\w+)["`]?\s*\(([^)]+)\)(?:\s+WHERE\s+(.+?))?;',
-        re.IGNORECASE | re.DOTALL
+    CREATE_INDEX_HEAD = re.compile(
+        r'\s*CREATE\s+(UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)["`]?\s+'
+        r'ON\s+["`]?(\w+)["`]?\s*\(([^)]+)\)',
+        re.IGNORECASE
     )
+
+    WHERE_TAIL = re.compile(r'\s*WHERE\s', re.IGNORECASE)
 
     COLUMN_PATTERN = re.compile(
         r'["`]?(\w+)["`]?\s+'  # Column name
@@ -92,31 +98,97 @@ class SQLParser:
         re.IGNORECASE
     )
 
+    def _split_statements(self, sql: str) -> List[str]:
+        """Split SQL into statements on ';' in a single linear pass.
+
+        Respects quotes and comments; semicolons inside them do not split.
+        """
+        statements = []
+        current = []
+        i = 0
+        n = len(sql)
+        quote = None
+        while i < n:
+            ch = sql[i]
+            if quote:
+                current.append(ch)
+                if ch == quote:
+                    quote = None
+            elif ch in ("'", '"', '`'):
+                quote = ch
+                current.append(ch)
+            elif ch == '-' and sql.startswith('--', i):
+                end = sql.find('\n', i)
+                i = n if end == -1 else end
+                continue
+            elif ch == '/' and sql.startswith('/*', i):
+                end = sql.find('*/', i + 2)
+                i = n if end == -1 else end + 2
+                current.append(' ')
+                continue
+            elif ch == ';':
+                statements.append(''.join(current))
+                current = []
+            else:
+                current.append(ch)
+            i += 1
+        if ''.join(current).strip():
+            statements.append(''.join(current))
+        return statements
+
+    def _extract_balanced(self, text: str, start: int) -> Optional[str]:
+        """Return text inside the parenthesis group opened just before `start`."""
+        depth = 1
+        for pos in range(start, len(text)):
+            if text[pos] == '(':
+                depth += 1
+            elif text[pos] == ')':
+                depth -= 1
+                if depth == 0:
+                    return text[start:pos]
+        return None
+
     def parse(self, sql: str) -> Dict[str, Table]:
         """Parse SQL and return table definitions."""
-        tables = {}
+        if len(sql) > self.MAX_SQL_BYTES:
+            raise ValueError(
+                f"SQL input too large (> {self.MAX_SQL_BYTES} bytes)"
+            )
 
-        # Parse CREATE TABLE statements
-        for match in self.CREATE_TABLE_PATTERN.finditer(sql):
-            table_name = match.group(1)
-            body = match.group(2)
-            table = self._parse_table_body(table_name, body)
-            tables[table_name] = table
+        tables = {}
+        index_statements = []
+
+        for stmt in self._split_statements(sql):
+            match = self.CREATE_TABLE_HEAD.match(stmt)
+            if match:
+                body = self._extract_balanced(stmt, match.end())
+                if body is not None:
+                    table_name = match.group(1)
+                    tables[table_name] = self._parse_table_body(table_name, body)
+                continue
+            index_statements.append(stmt)
 
         # Parse CREATE INDEX statements
-        for match in self.CREATE_INDEX_PATTERN.finditer(sql):
+        for stmt in index_statements:
+            match = self.CREATE_INDEX_HEAD.match(stmt)
+            if not match:
+                continue
             unique = bool(match.group(1))
             index_name = match.group(2)
             table_name = match.group(3)
             columns = [c.strip().strip('"`') for c in match.group(4).split(',')]
-            where_clause = match.group(5)
+            where_clause = None
+            tail = stmt[match.end():]
+            where_match = self.WHERE_TAIL.match(tail)
+            if where_match:
+                where_clause = tail[where_match.end():]
 
             index = Index(
                 name=index_name,
                 table=table_name,
                 columns=columns,
                 unique=unique,
-                partial=where_clause.strip() if where_clause else None
+                partial=where_clause.strip() if where_clause and where_clause.strip() else None
             )
 
             if table_name in tables:

@@ -66,6 +66,9 @@ jobs:
             const { Anthropic } = require('@anthropic-ai/sdk');
             const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+            const changedFiles = process.env.CHANGED_FILES;
+            const prDiff = process.env.PR_DIFF;
+
             const response = await client.messages.create({
               model: "claude-3-sonnet-20240229",
               max_tokens: 4096,
@@ -73,10 +76,10 @@ jobs:
                 role: "user",
                 content: `Review this PR diff and provide feedback:
                 
-                Changed files: ${{ steps.changed.outputs.files }}
+                Changed files: ${changedFiles}
                 
                 Diff:
-                ${{ steps.diff.outputs.diff }}
+                ${prDiff}
                 
                 Provide:
                 1. Summary of changes
@@ -97,6 +100,8 @@ jobs:
             });
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+          PR_DIFF: ${{ steps.diff.outputs.diff }}
 ```
 
 ### 1.2 Review Comment Patterns
@@ -514,6 +519,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Verify commenter permission
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.payload.comment.user.login
+            });
+            if (!['admin', 'maintain', 'write'].includes(data.permission)) {
+              core.setFailed('Commenter lacks write permission to trigger a rebase.');
+            }
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            if (pr.head.repo.full_name !== pr.base.repo.full_name) {
+              core.setFailed('Refusing to auto-rebase and force-push a PR from a fork.');
+            }
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -637,7 +663,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const branches = `${{ steps.stale.outputs.branches }}`.split('\n').filter(Boolean);
+            const branches = (process.env.STALE_BRANCHES || '').split('\n').filter(Boolean);
 
             const body = `## 🧹 Stale Branch Cleanup
 
@@ -658,6 +684,8 @@ ${branches.map(b => `- \`${b}\``).join('\n')}
               body: body,
               labels: ['housekeeping']
             });
+        env:
+          STALE_BRANCHES: ${{ steps.stale.outputs.branches }}
 ```
 
 ---
@@ -688,8 +716,10 @@ jobs:
         id: question
         run: |
           # Extract text after @ai-helper
-          question=$(echo "${{ github.event.comment.body }}" | sed 's/.*@ai-helper//')
+          question=$(printf '%s' "$BODY" | sed 's/.*@ai-helper//' | tr '\n' ' ')
           echo "question=$question" >> $GITHUB_OUTPUT
+        env:
+          BODY: ${{ github.event.comment.body }}
 
       - name: Get context
         id: context

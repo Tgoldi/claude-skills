@@ -129,8 +129,8 @@ agent-browser snapshot -i
 # Output: @e1 [input type="email"], @e2 [input type="password"], @e3 [button] "Sign In"
 
 # Fill credentials
-agent-browser fill @e1 "user@example.com"
-agent-browser fill @e2 "password123"
+agent-browser fill @e1 "$APP_USERNAME"
+agent-browser fill @e2 "$APP_PASSWORD"
 
 # Submit
 agent-browser click @e3
@@ -148,8 +148,8 @@ After logging in, save state for reuse:
 # Login first (see above)
 agent-browser open https://app.example.com/login
 agent-browser snapshot -i
-agent-browser fill @e1 "user@example.com"
-agent-browser fill @e2 "password123"
+agent-browser fill @e1 "$APP_USERNAME"
+agent-browser fill @e2 "$APP_PASSWORD"
 agent-browser click @e3
 agent-browser wait --url "**/dashboard"
 
@@ -185,11 +185,11 @@ agent-browser wait --url "**/accounts.google.com**"
 agent-browser snapshot -i
 
 # Fill Google credentials
-agent-browser fill @e1 "user@gmail.com"
+agent-browser fill @e1 "$GOOGLE_USERNAME"
 agent-browser click @e2  # Next button
 agent-browser wait 2000
 agent-browser snapshot -i
-agent-browser fill @e3 "password"
+agent-browser fill @e3 "$GOOGLE_PASSWORD"
 agent-browser click @e4  # Sign in
 
 # Wait for redirect back
@@ -205,8 +205,8 @@ Handle 2FA with manual intervention:
 # Login with credentials
 agent-browser open https://app.example.com/login --headed  # Show browser
 agent-browser snapshot -i
-agent-browser fill @e1 "user@example.com"
-agent-browser fill @e2 "password123"
+agent-browser fill @e1 "$APP_USERNAME"
+agent-browser fill @e2 "$APP_PASSWORD"
 agent-browser click @e3
 
 # Wait for user to complete 2FA manually
@@ -223,7 +223,7 @@ For sites using HTTP Basic Authentication:
 
 ```bash
 # Set credentials before navigation
-agent-browser set credentials username password
+agent-browser set credentials "$APP_USERNAME" "$APP_PASSWORD"
 
 # Navigate to protected resource
 agent-browser open https://protected.example.com/api
@@ -235,7 +235,7 @@ Manually set authentication cookies:
 
 ```bash
 # Set auth cookie
-agent-browser cookies set session_token "abc123xyz"
+agent-browser cookies set session_token "$SESSION_TOKEN"
 
 # Navigate to protected page
 agent-browser open https://app.example.com/dashboard

@@ -94,13 +94,8 @@ class HTTPClient:
         self.headers = headers or {}
         self.verify_ssl = verify_ssl
 
-        # Create SSL context
-        if not verify_ssl:
-            self.ssl_context = ssl.create_default_context()
-            self.ssl_context.check_hostname = False
-            self.ssl_context.verify_mode = ssl.CERT_NONE
-        else:
-            self.ssl_context = None
+        # Always use a verifying SSL context (CERT_REQUIRED, check_hostname=True)
+        self.ssl_context = ssl.create_default_context()
 
     def request(self, url: str, method: str = 'GET', body: Optional[bytes] = None) -> RequestResult:
         """Execute HTTP request and return result."""
@@ -537,11 +532,6 @@ Examples:
         help='Compare two endpoints (requires two URLs)'
     )
     parser.add_argument(
-        '--no-verify-ssl',
-        action='store_true',
-        help='Disable SSL certificate verification'
-    )
-    parser.add_argument(
         '--verbose', '-v',
         action='store_true',
         help='Enable verbose output'
@@ -577,7 +567,7 @@ Examples:
             timeout=args.timeout,
             compare=args.compare,
             verbose=args.verbose,
-            verify_ssl=not args.no_verify_ssl,
+            verify_ssl=True,
         )
 
         results = tester.run()

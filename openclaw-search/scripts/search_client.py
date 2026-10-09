@@ -15,13 +15,66 @@ Usage:
 
 import argparse
 import json
+import ipaddress
 import os
+import socket
 import sys
 import urllib.request
 import urllib.parse
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
+
+
+MAX_EXTRACT_URLS = 20
+MAX_CRAWL_DEPTH = 5
+
+
+def _validate_public_url(url: str) -> str:
+    """Validate that a URL is https and that its host resolves only to public IPs.
+
+    Raises ValueError for non-https schemes, missing hosts, embedded credentials,
+    unresolvable hosts, or hosts resolving to private/loopback/link-local/
+    reserved/metadata addresses. The upstream service must enforce the same
+    restrictions, since DNS may change between this check and the remote fetch.
+    """
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("URL must be a non-empty string")
+    url = url.strip()
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError(f"Only https URLs are allowed: {url}")
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"URL has no hostname: {url}")
+    if parsed.username or parsed.password:
+        raise ValueError(f"URLs with embedded credentials are not allowed: {url}")
+    try:
+        port = parsed.port or 443
+    except ValueError:
+        raise ValueError(f"Invalid port in URL: {url}")
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        raise ValueError(f"Hostname could not be resolved: {host}")
+    if not infos:
+        raise ValueError(f"Hostname could not be resolved: {host}")
+    for info in infos:
+        ip_str = info[4][0].split("%")[0]
+        ip = ipaddress.ip_address(ip_str)
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+            or not ip.is_global
+        ):
+            raise ValueError(f"URL host resolves to a non-public address: {host}")
+    return url
 
 
 class SearchClient:
@@ -137,14 +190,20 @@ class SearchClient:
     
     def tavily_extract(self, urls: List[str]) -> Dict[str, Any]:
         """Extract content from URLs."""
+        if not urls or len(urls) > MAX_EXTRACT_URLS:
+            raise ValueError(f"Provide between 1 and {MAX_EXTRACT_URLS} URLs")
+        urls = [_validate_public_url(u) for u in urls]
         return self._request("POST", "/tavily/extract", data={"urls": urls})
     
     def tavily_crawl(self, url: str, max_depth: int = 2) -> Dict[str, Any]:
         """Crawl web pages."""
+        url = _validate_public_url(url)
+        max_depth = max(1, min(int(max_depth), MAX_CRAWL_DEPTH))
         return self._request("POST", "/tavily/crawl", data={"url": url, "max_depth": max_depth})
     
     def tavily_map(self, url: str) -> Dict[str, Any]:
         """Generate site map."""
+        url = _validate_public_url(url)
         return self._request("POST", "/tavily/map", data={"url": url})
     
     # ==================== Verity-Style Multi-Source Search ====================
@@ -376,6 +435,25 @@ Examples:
     
     result = None
     
+    try:
+        result = _dispatch(client, args)
+    except ValueError as e:
+        print(json.dumps({"success": False, "error": {"code": "INVALID_INPUT", "message": str(e)}}))
+        sys.exit(1)
+    
+    if result:
+        output = json.dumps(result, indent=2, ensure_ascii=False)
+        try:
+            print(output)
+        except UnicodeEncodeError:
+            print(json.dumps(result, indent=2, ensure_ascii=True))
+        sys.exit(0 if result.get("success", True) else 1)
+
+
+def _dispatch(client: "SearchClient", args) -> Optional[Dict[str, Any]]:
+    """Run the selected command and return its result."""
+    result = None
+    
     if args.command == "web":
         result = client.web_search(args.query, args.count)
     elif args.command == "scholar":
@@ -396,13 +474,7 @@ Examples:
     elif args.command == "verity":
         result = client.verity_search(args.query, args.count)
     
-    if result:
-        output = json.dumps(result, indent=2, ensure_ascii=False)
-        try:
-            print(output)
-        except UnicodeEncodeError:
-            print(json.dumps(result, indent=2, ensure_ascii=True))
-        sys.exit(0 if result.get("success", True) else 1)
+    return result
 
 
 if __name__ == "__main__":

@@ -107,8 +107,16 @@ class FileOrganizer:
 
     def save_log(self):
         log_file = os.path.join(self.root_dir, "organize_history.json")
-        with open(log_file, 'w') as f:
+        if os.path.islink(log_file):
+            logger.error(f"Refusing to write history: '{log_file}' is a symlink.")
+            return
+        tmp_file = log_file + ".tmp"
+        if os.path.islink(tmp_file):
+            logger.error(f"Refusing to write history: '{tmp_file}' is a symlink.")
+            return
+        with open(tmp_file, 'w') as f:
             json.dump(self.history, f, indent=2)
+        os.replace(tmp_file, log_file)
         logger.info(f"History saved to {log_file}")
 
     def undo(self, log_file):
@@ -120,9 +128,27 @@ class FileOrganizer:
             history = json.load(f)
         
         logger.info(f"Undoing {len(history)} operations...")
+        root_real = os.path.realpath(self.root_dir)
+
+        def _inside_root(p):
+            try:
+                real = os.path.realpath(p)
+                return os.path.commonpath([root_real, real]) == root_real
+            except (ValueError, TypeError):
+                return False
+
         for item in reversed(history):
-            src = item['src']
-            dst = item['dst']
+            if not isinstance(item, dict):
+                logger.error("Skipping malformed history entry.")
+                continue
+            src = item.get('src')
+            dst = item.get('dst')
+            if not isinstance(src, str) or not isinstance(dst, str):
+                logger.error("Skipping malformed history entry.")
+                continue
+            if not (_inside_root(src) and _inside_root(dst)):
+                logger.error(f"Skipping entry outside target directory: {src} <- {dst}")
+                continue
             try:
                 if os.path.exists(dst):
                     shutil.move(dst, src)

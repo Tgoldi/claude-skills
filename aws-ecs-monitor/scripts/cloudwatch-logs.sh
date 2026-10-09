@@ -67,6 +67,14 @@ if [[ ${#ALL_SERVICES_ARR[@]} -eq 0 ]]; then
   exit 2
 fi
 
+# Validate service names (alphanumeric, underscore, hyphen only)
+for _s in "${ALL_SERVICES_ARR[@]}"; do
+  if [[ ! "$_s" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "ERROR: Invalid service name: '$_s'" >&2
+    exit 2
+  fi
+done
+
 ALL_SERVICES="${ALL_SERVICES_ARR[*]}"
 
 # Build log group mapping
@@ -127,7 +135,7 @@ cmd_pull() {
     if $JSON_OUT; then
       echo "$result" | python3 -c "
 import json,sys; d=json.load(sys.stdin); e=d.get('events',[])
-print(json.dumps({'service':'$svc','log_group':'$lg','count':len(e),'events':e},indent=2))"
+print(json.dumps({'service':sys.argv[1],'log_group':sys.argv[2],'count':len(e),'events':e},indent=2))" "$svc" "$lg"
     else
       local count; count=$(echo "$result" | python3 -c "import json,sys;print(len(json.load(sys.stdin).get('events',[])))" 2>/dev/null)
       echo "=== $svc ($lg) — $count events in last ${MINUTES}m ==="
@@ -156,7 +164,7 @@ cmd_errors() {
       if $JSON_OUT; then
         echo "$result" | python3 -c "
 import json,sys; d=json.load(sys.stdin); e=d.get('events',[])
-print(json.dumps({'service':'$svc','error_count':len(e),'events':e},indent=2))"
+print(json.dumps({'service':sys.argv[1],'error_count':len(e),'events':e},indent=2))" "$svc"
       else
         echo "🔴 $svc — $count error(s) in last ${MINUTES}m:"
         echo "$result" | python3 -c "
@@ -205,14 +213,16 @@ print()" 2>/dev/null
 # ---------------------------------------------------------------------------
 cmd_diagnose() {
   mkdir -p "$DATA_DIR"
-  local lg_json="{"
-  local first=true
+  local lg_args=()
   for svc in $(resolve_services "$SERVICE"); do
-    $first || lg_json+=","
-    first=false
-    lg_json+="\"$svc\":\"${LOG_GROUPS[$svc]}\""
+    lg_args+=("$svc" "${LOG_GROUPS[$svc]}")
   done
-  lg_json+="}"
+  local lg_json
+  lg_json=$(python3 -c "
+import json, sys
+a = sys.argv[1:]
+print(json.dumps({a[i]: a[i+1] for i in range(0, len(a), 2)}))
+" "${lg_args[@]}")
 
   CW_SERVICES="$(resolve_services "$SERVICE")" CW_REGION="$REGION" \
   CW_MINUTES="$MINUTES" CW_LIMIT="$LIMIT" CW_JSON_OUT="$JSON_OUT" \
@@ -344,10 +354,12 @@ cmd_auto_diagnose() {
   fi
 
   # Parse health file to find failing services and print header
+  local svc_tmp
+  svc_tmp=$(mktemp "${TMPDIR:-/tmp}/ecs-ad-svcs.XXXXXX") || exit 2
   local failing_svcs
   failing_svcs=$(python3 -c "
 import json, sys
-with open('$HEALTH_FILE') as f: health = json.load(f)
+with open(sys.argv[1]) as f: health = json.load(f)
 overall = health.get('overall','unknown')
 checks = health.get('checks',{})
 print(f'Production Status: {overall} (from {health.get(\"timestamp\",\"unknown\")})', file=sys.stderr)
@@ -391,15 +403,15 @@ if not svcs:
 
 # Output service names to stdout for bash to consume
 print(' '.join(svcs) if svcs else '')
-" 2>&1 1>/tmp/ecs-ad-svcs.$$)
+" "$HEALTH_FILE" 2>&1 1>"$svc_tmp")
 
   # Print the header/issues (stderr was redirected to stdout above)
   echo "$failing_svcs"
 
   # Read the services list
   local svc_list
-  svc_list=$(cat /tmp/ecs-ad-svcs.$$ 2>/dev/null)
-  rm -f /tmp/ecs-ad-svcs.$$
+  svc_list=$(cat "$svc_tmp" 2>/dev/null)
+  rm -f "$svc_tmp"
 
   if [[ -z "$svc_list" ]]; then
     return 0

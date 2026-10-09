@@ -44,8 +44,9 @@ Parameters:
 
   CorsAllowedOrigins:
     Type: String
-    Default: '*'
-    Description: CORS allowed origins for API Gateway
+    AllowedPattern: '^https://[^*]+$'
+    ConstraintDescription: Must be an explicit https origin (no wildcards)
+    Description: CORS allowed origin for API Gateway (frontend origin, no wildcard)
 
 Resources:
   # DynamoDB Table
@@ -168,7 +169,7 @@ Resources:
           RequireLowercase: true
           RequireNumbers: true
           RequireSymbols: false
-      MfaConfiguration: OPTIONAL
+      MfaConfiguration: 'ON'
       EnabledMfas:
         - SOFTWARE_TOKEN_MFA
       UserAttributeUpdateSettings:
@@ -249,6 +250,15 @@ export class {self.app_name.replace('-', '').title()}Stack extends cdk.Stack {{
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {{
     super(scope, id, props);
 
+    // Explicit list of frontend origins, e.g. cdk deploy -c corsAllowedOrigins=https://app.mydomain.tld
+    const corsAllowedOrigins: string[] = String(this.node.tryGetContext('corsAllowedOrigins') ?? '')
+      .split(',')
+      .map((o) => o.trim())
+      .filter((o) => o.length > 0);
+    if (corsAllowedOrigins.length === 0 || corsAllowedOrigins.includes('*')) {{
+      throw new Error('Provide explicit frontend origins via -c corsAllowedOrigins=https://... (wildcard not allowed)');
+    }}
+
     // DynamoDB Table
     const table = new dynamodb.Table(this, '{self.app_name}Table', {{
       tableName: `${{cdk.Stack.of(this).stackName}}-data`,
@@ -274,7 +284,7 @@ export class {self.app_name.replace('-', '').title()}Stack extends cdk.Stack {{
         requireDigits: true,
         requireSymbols: false,
       }},
-      mfa: cognito.Mfa.OPTIONAL,
+      mfa: cognito.Mfa.REQUIRED,
       mfaSecondFactor: {{
         sms: false,
         otp: true,
@@ -313,7 +323,7 @@ export class {self.app_name.replace('-', '').title()}Stack extends cdk.Stack {{
       restApiName: `${{cdk.Stack.of(this).stackName}}-api`,
       description: 'API for {self.app_name}',
       defaultCorsPreflightOptions: {{
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowOrigins: corsAllowedOrigins,
         allowMethods: apigateway.Cors.ALL_METHODS,
         allowHeaders: ['Content-Type', 'Authorization'],
       }},
@@ -457,7 +467,7 @@ resource "aws_cognito_user_pool" "main" {{
     require_symbols   = false
   }}
 
-  mfa_configuration = "OPTIONAL"
+  mfa_configuration = "ON"
 
   software_token_mfa_configuration {{
     enabled = true

@@ -187,7 +187,17 @@ function validateEvent(msg) {
 function createRequestHandler({ detectScript, livePath }) {
   return (req, res) => {
     const url = new URL(req.url, `http://localhost:${state.port}`);
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // The server runs on loopback and serves a script that is injected into the
+    // user's own dev page (any localhost origin/port). Only allow loopback origins.
+    const reqOrigin = req.headers.origin;
+    if (reqOrigin) {
+      let originHost = null;
+      try { originHost = new URL(reqOrigin).hostname; } catch { /* invalid origin */ }
+      if (originHost === 'localhost' || originHost === '127.0.0.1' || originHost === '[::1]' || originHost === '::1') {
+        res.setHeader('Access-Control-Allow-Origin', reqOrigin);
+        res.setHeader('Vary', 'Origin');
+      }
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
@@ -209,8 +219,8 @@ function createRequestHandler({ detectScript, livePath }) {
         return;
       }
       const body =
-        `window.__IMPECCABLE_TOKEN__ = '${state.token}';\n` +
-        `window.__IMPECCABLE_PORT__ = ${state.port};\n` +
+        `window.__IMPECCABLE_TOKEN__ = ${JSON.stringify(String(state.token))};\n` +
+        `window.__IMPECCABLE_PORT__ = ${JSON.stringify(Number(state.port))};\n` +
         liveScript;
       res.writeHead(200, {
         'Content-Type': 'application/javascript',
@@ -383,9 +393,15 @@ function createRequestHandler({ detectScript, livePath }) {
       const filePath = url.searchParams.get('path');
       if (!filePath || filePath.includes('..')) { res.writeHead(400); res.end('Bad path'); return; }
       const absPath = path.resolve(process.cwd(), filePath);
-      if (!absPath.startsWith(process.cwd())) { res.writeHead(403); res.end('Forbidden'); return; }
+      let realRoot;
+      let realPath;
+      try {
+        realRoot = fs.realpathSync(process.cwd());
+        realPath = fs.realpathSync(absPath);
+      } catch { res.writeHead(404); res.end('File not found'); return; }
+      if (!(realPath + path.sep).startsWith(realRoot + path.sep)) { res.writeHead(403); res.end('Forbidden'); return; }
       let content;
-      try { content = fs.readFileSync(absPath, 'utf-8'); }
+      try { content = fs.readFileSync(realPath, 'utf-8'); }
       catch { res.writeHead(404); res.end('File not found'); return; }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(content);

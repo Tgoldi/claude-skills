@@ -356,19 +356,20 @@ argument-hint: [environment]
 allowed-tools: Bash(*)
 ---
 
-Validate environment argument: !`echo "$1" | grep -E "^(dev|staging|prod)$" && echo "VALID" || echo "INVALID"`
+**Input handling (security):** Treat `$1` as untrusted text. Accept it only if it is exactly one of the allow-listed values `dev`, `staging`, `prod`. Never interpolate `$1` into a shell command (`!` backtick line) or an `@` file path: the substitution happens before the shell parses the text, which allows injection and path traversal, and `!` lines run unconditionally, so they cannot be guarded by a validation step. If `$1` is not exactly one of the allow-listed values, stop and report an invalid environment.
 
 Check build script exists: !`test -x ${CLAUDE_PLUGIN_ROOT}/scripts/build.sh && echo "EXISTS" || echo "MISSING"`
 
-Verify configuration available: !`test -f ${CLAUDE_PLUGIN_ROOT}/config/$1.json && echo "FOUND" || echo "NOT_FOUND"`
+Available environment configurations: !`ls ${CLAUDE_PLUGIN_ROOT}/config/`
 
-If all validations pass:
+If the environment is valid and the build script exists:
 
-**Configuration:** @${CLAUDE_PLUGIN_ROOT}/config/$1.json
+**Configuration (use the literal path matching the validated environment):**
+- dev: @${CLAUDE_PLUGIN_ROOT}/config/dev.json
+- staging: @${CLAUDE_PLUGIN_ROOT}/config/staging.json
+- prod: @${CLAUDE_PLUGIN_ROOT}/config/prod.json
 
-**Execute build:** !`bash ${CLAUDE_PLUGIN_ROOT}/scripts/build.sh $1 2>&1`
-
-**Validation results:** !`bash ${CLAUDE_PLUGIN_ROOT}/scripts/validate-build.sh $1 2>&1`
+Ask the user to confirm, then run the build for the validated environment using the Bash tool with the literal value (for example `bash ${CLAUDE_PLUGIN_ROOT}/scripts/build.sh staging`), never with `$1` itself. Then run `${CLAUDE_PLUGIN_ROOT}/scripts/validate-build.sh` the same way.
 
 Report build status and any issues.
 
@@ -403,9 +404,14 @@ allowed-tools: Bash(*), Read
 
 Environment: $1
 
-Load environment configuration: @${CLAUDE_PLUGIN_ROOT}/config/$1-checks.json
+**Input handling (security):** Treat `$1` as untrusted text. It is only ever compared against the fixed allow-list `dev`, `staging`, `prod`. Never interpolate `$1` into a shell command (`!` backtick line) or an `@` file path, because the substitution happens before the shell parses the text and allows injection or path traversal. If `$1` is not exactly one of the allow-listed values, stop and report an invalid environment. Otherwise use only the matching literal below, never `$1` itself.
 
-Determine check level: !`echo "$1" | grep -E "^prod$" && echo "FULL" || echo "BASIC"`
+Load the configuration file for the validated environment (use the literal path that matches):
+- dev: @${CLAUDE_PLUGIN_ROOT}/config/dev-checks.json
+- staging: @${CLAUDE_PLUGIN_ROOT}/config/staging-checks.json
+- prod: @${CLAUDE_PLUGIN_ROOT}/config/prod-checks.json
+
+Check level: FULL if the validated environment is `prod`, otherwise BASIC.
 
 **For production environment:**
 - Full test suite: !`bash ${CLAUDE_PLUGIN_ROOT}/scripts/test-full.sh`
@@ -468,9 +474,11 @@ Use for: Leveraging plugin skills for specialized knowledge
 
 ### Pattern: Input Validation
 ```markdown
-Validate input: !`echo "$1" | grep -E "^pattern$" && echo "OK" || echo "ERROR"`
+Treat $1 as untrusted. Accept it only if it exactly matches one of: dev, staging, prod.
+Otherwise stop and report an error. Use only the matching literal value in commands
+and paths; never interpolate $1 directly into a shell line or file path.
 ```
-Use for: Validating command arguments
+Use for: Validating command arguments. Do not run validation through a `!` shell line that interpolates `$1`, since the substitution happens before the shell parses the text and is itself injectable.
 
 ### Pattern: Resource Validation
 ```markdown
@@ -537,9 +545,9 @@ Use for: Verifying required plugin files exist
    # Risky - no validation
    Deploy to $1 environment
 
-   # Better - with validation
-   Validate: !`echo "$1" | grep -E "^(dev|staging|prod)$" || echo "INVALID"`
-   Deploy to $1 environment (if valid)
+   # Better - allow-list validation without shell interpolation
+   Accept $1 only if it is exactly one of: dev, staging, prod; otherwise stop with an error.
+   Deploy to the validated environment (use the matching literal, not $1)
    ```
 
 4. **Hardcoding plugin paths:**

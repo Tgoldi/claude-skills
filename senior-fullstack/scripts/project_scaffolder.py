@@ -271,7 +271,7 @@ from typing import List
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://user:pass@localhost:5432/db"
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
-    SECRET_KEY: str = "change-me-in-production"
+    SECRET_KEY: str  # required: set via environment / .env (no hardcoded default)
 
     class Config:
         env_file = ".env"
@@ -363,7 +363,11 @@ app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
         "config.ts": '''export const config = {
   PORT: parseInt(process.env.PORT || "8000"),
   MONGODB_URI: process.env.MONGODB_URI || "mongodb://localhost:27017/app",
-  JWT_SECRET: process.env.JWT_SECRET || "change-me",
+  JWT_SECRET: (() => {
+    const secret = process.env.JWT_SECRET;
+    if (!secret) throw new Error("JWT_SECRET environment variable is required");
+    return secret;
+  })(),
 };
 ''',
         "database.ts": '''import mongoose from "mongoose";
@@ -521,7 +525,7 @@ export default defineConfig({
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "change-me")
+SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
 DEBUG = os.environ.get("DEBUG", "True") == "True"
 ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
@@ -627,7 +631,7 @@ export default config;
 module.exports = { reactStrictMode: true };
 ''',
         ".env.example": '''DATABASE_URL="postgresql://user:password@localhost:5432/dbname"
-SECRET_KEY="your-secret-here"
+DJANGO_SECRET_KEY=
 ''',
         ".gitignore": '''node_modules/
 .next/

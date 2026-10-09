@@ -417,7 +417,7 @@
     annotState.comments = [];
     annotState.strokes = [];
     if (annotSvgEl) while (annotSvgEl.firstChild) annotSvgEl.removeChild(annotSvgEl.firstChild);
-    if (annotPinsEl) annotPinsEl.innerHTML = '';
+    if (annotPinsEl) annotPinsEl.textContent = '';
     annotPointer = null;
     annotEditing = null;
     annotLastPinClick = { idx: -1, time: 0 };
@@ -617,7 +617,7 @@
   }
 
   function renderAllPins() {
-    annotPinsEl.innerHTML = '';
+    annotPinsEl.textContent = '';
     annotState.comments.forEach((c, idx) => {
       annotPinsEl.appendChild(buildPinElement(c, idx));
     });
@@ -887,7 +887,7 @@
   }
 
   function showBar(mode) {
-    barEl.innerHTML = '';
+    barEl.textContent = '';
     if (mode === 'configure') barEl.appendChild(buildConfigureRow());
     else if (mode === 'generating') barEl.appendChild(buildGeneratingRow());
     else if (mode === 'cycling') barEl.appendChild(buildCyclingRow());
