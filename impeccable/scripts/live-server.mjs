@@ -66,6 +66,8 @@ const state = {
 // Cap per-annotation upload size. A full 1920×1080 PNG is typically <1 MB;
 // cap at 10 MB to guard against runaway writes from a misbehaving client.
 const MAX_ANNOTATION_BYTES = 10 * 1024 * 1024;
+// Cap for JSON bodies on /events and /poll POST endpoints.
+const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
 function enqueueEvent(event) {
   if (state.pendingPolls.length > 0) {
@@ -187,7 +189,14 @@ function validateEvent(msg) {
 function createRequestHandler({ detectScript, livePath }) {
   return (req, res) => {
     const url = new URL(req.url, `http://localhost:${state.port}`);
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // The live script is injected into the user's dev page, whose origin is not
+    // known here. Reflect the Origin only when it is a loopback origin; never
+    // use a wildcard.
+    const reqOrigin = req.headers.origin;
+    if (reqOrigin && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(reqOrigin)) {
+      res.setHeader('Access-Control-Allow-Origin', reqOrigin);
+      res.setHeader('Vary', 'Origin');
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
@@ -383,11 +392,15 @@ function createRequestHandler({ detectScript, livePath }) {
       const filePath = url.searchParams.get('path');
       if (!filePath || filePath.includes('..')) { res.writeHead(400); res.end('Bad path'); return; }
       const absPath = path.resolve(process.cwd(), filePath);
-      if (!absPath.startsWith(process.cwd())) { res.writeHead(403); res.end('Forbidden'); return; }
+      const relPath = path.relative(process.cwd(), absPath);
+      if (!relPath || relPath.startsWith('..') || path.isAbsolute(relPath)) { res.writeHead(403); res.end('Forbidden'); return; }
       let content;
       try { content = fs.readFileSync(absPath, 'utf-8'); }
       catch { res.writeHead(404); res.end('File not found'); return; }
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'X-Content-Type-Options': 'nosniff',
+      });
       res.end(content);
       return;
     }
@@ -430,8 +443,19 @@ function createRequestHandler({ detectScript, livePath }) {
     // --- Browser→server events (replaces WebSocket messages) ---
     if (p === '/events' && req.method === 'POST') {
       let body = '';
-      req.on('data', (c) => { body += c; });
+      let tooLarge = false;
+      req.on('data', (c) => {
+        if (tooLarge) return;
+        body += c;
+        if (body.length > MAX_JSON_BODY_BYTES) {
+          tooLarge = true;
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Payload too large' }));
+          req.destroy();
+        }
+      });
       req.on('end', () => {
+        if (tooLarge) return;
         let msg;
         try { msg = JSON.parse(body); } catch {
           res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -518,8 +542,19 @@ function handlePollGet(req, res, url) {
 
 function handlePollPost(req, res) {
   let body = '';
-  req.on('data', (c) => { body += c; });
+  let tooLarge = false;
+  req.on('data', (c) => {
+    if (tooLarge) return;
+    body += c;
+    if (body.length > MAX_JSON_BODY_BYTES) {
+      tooLarge = true;
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Payload too large' }));
+      req.destroy();
+    }
+  });
   req.on('end', () => {
+    if (tooLarge) return;
     let msg;
     try { msg = JSON.parse(body); } catch {
       res.writeHead(400, { 'Content-Type': 'application/json' });

@@ -25,7 +25,18 @@
 set -euo pipefail
 
 LOGIN_URL="${1:?Usage: $0 <login-url> [state-file]}"
-STATE_FILE="${2:-./auth-state.json}"
+# Default to a private per-user directory outside the project tree so session
+# tokens are never written next to the source (and never committed by accident).
+# If you override with a path inside a repo, add it to .gitignore.
+umask 077
+if [[ -n "${2:-}" ]]; then
+    STATE_FILE="$2"
+else
+    STATE_DIR="${HOME}/.agent-browser/auth"
+    mkdir -p "$STATE_DIR"
+    chmod 700 "$STATE_DIR"
+    STATE_FILE="$STATE_DIR/auth-state.json"
+fi
 
 echo "Authentication workflow: $LOGIN_URL"
 
@@ -101,5 +112,6 @@ exit 0
 # # Save state for future runs
 # echo "Saving state to $STATE_FILE"
 # agent-browser state save "$STATE_FILE"
+# chmod 600 "$STATE_FILE"
 # echo "Login successful"
 # agent-browser snapshot -i

@@ -68,16 +68,20 @@ class SQLParser:
     """Parse SQL DDL statements."""
 
     # Common patterns
-    CREATE_TABLE_PATTERN = re.compile(
-        r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)["`]?\s*\((.*?)\)\s*;',
-        re.IGNORECASE | re.DOTALL
+    # Header-only patterns: applied to a single, already-isolated statement and
+    # anchored with match(), with no lazy quantifiers spanning the statement body.
+    CREATE_TABLE_HEAD_PATTERN = re.compile(
+        r'\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)["`]?\s*\(',
+        re.IGNORECASE
     )
 
-    CREATE_INDEX_PATTERN = re.compile(
-        r'CREATE\s+(UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)["`]?\s+'
-        r'ON\s+["`]?(\w+)["`]?\s*\(([^)]+)\)(?:\s+WHERE\s+(.+?))?;',
-        re.IGNORECASE | re.DOTALL
+    CREATE_INDEX_HEAD_PATTERN = re.compile(
+        r'\s*CREATE\s+(UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?(\w+)["`]?\s+'
+        r'ON\s+["`]?(\w+)["`]?\s*\(',
+        re.IGNORECASE
     )
+
+    WHERE_KEYWORD_PATTERN = re.compile(r'\s*WHERE\s+', re.IGNORECASE)
 
     COLUMN_PATTERN = re.compile(
         r'["`]?(\w+)["`]?\s+'  # Column name
@@ -92,31 +96,102 @@ class SQLParser:
         re.IGNORECASE
     )
 
+    @staticmethod
+    def _split_statements(sql: str) -> List[str]:
+        """Split SQL into statements on ';' in a single linear pass,
+        respecting quotes and comments."""
+        statements = []
+        current = []
+        i = 0
+        n = len(sql)
+        quote = None
+        while i < n:
+            ch = sql[i]
+            if quote:
+                current.append(ch)
+                if ch == quote:
+                    quote = None
+            elif ch in ("'", '"', '`'):
+                quote = ch
+                current.append(ch)
+            elif ch == '-' and sql.startswith('--', i):
+                end = sql.find('\n', i)
+                i = n if end == -1 else end
+                continue
+            elif ch == '/' and sql.startswith('/*', i):
+                end = sql.find('*/', i + 2)
+                i = n if end == -1 else end + 2
+                continue
+            elif ch == ';':
+                statements.append(''.join(current))
+                current = []
+            else:
+                current.append(ch)
+            i += 1
+        if ''.join(current).strip():
+            statements.append(''.join(current))
+        return statements
+
+    @staticmethod
+    def _balanced_paren_end(s: str, start: int) -> int:
+        """Given index just after an opening '(', return index of the matching
+        ')' (or -1). Linear time."""
+        depth = 1
+        quote = None
+        for i in range(start, len(s)):
+            ch = s[i]
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in ("'", '"', '`'):
+                quote = ch
+            elif ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    return i
+        return -1
+
     def parse(self, sql: str) -> Dict[str, Table]:
         """Parse SQL and return table definitions."""
         tables = {}
+        index_stmts = []
 
-        # Parse CREATE TABLE statements
-        for match in self.CREATE_TABLE_PATTERN.finditer(sql):
-            table_name = match.group(1)
-            body = match.group(2)
-            table = self._parse_table_body(table_name, body)
-            tables[table_name] = table
+        for stmt in self._split_statements(sql):
+            # Parse CREATE TABLE statements
+            m = self.CREATE_TABLE_HEAD_PATTERN.match(stmt)
+            if m:
+                end = self._balanced_paren_end(stmt, m.end())
+                if end != -1:
+                    table_name = m.group(1)
+                    body = stmt[m.end():end]
+                    tables[table_name] = self._parse_table_body(table_name, body)
+                continue
+
+            m = self.CREATE_INDEX_HEAD_PATTERN.match(stmt)
+            if m:
+                end = self._balanced_paren_end(stmt, m.end())
+                if end != -1:
+                    index_stmts.append((m, stmt, end))
 
         # Parse CREATE INDEX statements
-        for match in self.CREATE_INDEX_PATTERN.finditer(sql):
-            unique = bool(match.group(1))
-            index_name = match.group(2)
-            table_name = match.group(3)
-            columns = [c.strip().strip('"`') for c in match.group(4).split(',')]
-            where_clause = match.group(5)
+        for m, stmt, end in index_stmts:
+            unique = bool(m.group(1))
+            index_name = m.group(2)
+            table_name = m.group(3)
+            columns = [c.strip().strip('"`') for c in stmt[m.end():end].split(',')]
+            where_clause = None
+            w = self.WHERE_KEYWORD_PATTERN.match(stmt, end + 1)
+            if w:
+                where_clause = stmt[w.end():]
 
             index = Index(
                 name=index_name,
                 table=table_name,
                 columns=columns,
                 unique=unique,
-                partial=where_clause.strip() if where_clause else None
+                partial=where_clause.strip() if where_clause and where_clause.strip() else None
             )
 
             if table_name in tables:

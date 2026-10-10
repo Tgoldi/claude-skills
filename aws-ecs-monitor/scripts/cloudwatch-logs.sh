@@ -205,16 +205,27 @@ print()" 2>/dev/null
 # ---------------------------------------------------------------------------
 cmd_diagnose() {
   mkdir -p "$DATA_DIR"
-  local lg_json="{"
-  local first=true
-  for svc in $(resolve_services "$SERVICE"); do
-    $first || lg_json+=","
-    first=false
-    lg_json+="\"$svc\":\"${LOG_GROUPS[$svc]}\""
-  done
-  lg_json+="}"
+  local resolved_svcs
+  resolved_svcs="$(resolve_services "$SERVICE")" || return 2
+  local -a svc_arr
+  read -ra svc_arr <<< "$resolved_svcs"
+  local lg_json
+  lg_json=$(
+    for svc in "${svc_arr[@]}"; do
+      printf '%s\0%s\0' "$svc" "${LOG_GROUPS[$svc]}"
+    done | python3 -c "
+import json, sys
+parts = sys.stdin.buffer.read().split(b'\0')
+parts = [p.decode() for p in parts if p != b'' or False]
+d = {}
+for i in range(0, len(parts) - 1, 2):
+    d[parts[i]] = parts[i + 1]
+print(json.dumps(d))
+"
+  )
+  [[ -z "$lg_json" ]] && lg_json="{}"
 
-  CW_SERVICES="$(resolve_services "$SERVICE")" CW_REGION="$REGION" \
+  CW_SERVICES="$resolved_svcs" CW_REGION="$REGION" \
   CW_MINUTES="$MINUTES" CW_LIMIT="$LIMIT" CW_JSON_OUT="$JSON_OUT" \
   CW_VERBOSE="$VERBOSE" CW_LOG_GROUPS="$lg_json" python3 <<'PYEOF'
 import json, sys, subprocess, re, datetime, os
@@ -344,10 +355,11 @@ cmd_auto_diagnose() {
   fi
 
   # Parse health file to find failing services and print header
-  local failing_svcs
-  failing_svcs=$(python3 -c "
-import json, sys
-with open('$HEALTH_FILE') as f: health = json.load(f)
+  local failing_svcs svcs_tmp
+  svcs_tmp=$(mktemp "${TMPDIR:-/tmp}/ecs-ad-svcs.XXXXXX") || exit 2
+  failing_svcs=$(CW_HEALTH_FILE="$HEALTH_FILE" python3 -c "
+import json, sys, os
+with open(os.environ['CW_HEALTH_FILE']) as f: health = json.load(f)
 overall = health.get('overall','unknown')
 checks = health.get('checks',{})
 print(f'Production Status: {overall} (from {health.get(\"timestamp\",\"unknown\")})', file=sys.stderr)
@@ -391,15 +403,15 @@ if not svcs:
 
 # Output service names to stdout for bash to consume
 print(' '.join(svcs) if svcs else '')
-" 2>&1 1>/tmp/ecs-ad-svcs.$$)
+" 2>&1 1>"$svcs_tmp")
 
   # Print the header/issues (stderr was redirected to stdout above)
   echo "$failing_svcs"
 
   # Read the services list
   local svc_list
-  svc_list=$(cat /tmp/ecs-ad-svcs.$$ 2>/dev/null)
-  rm -f /tmp/ecs-ad-svcs.$$
+  svc_list=$(cat "$svcs_tmp" 2>/dev/null)
+  rm -f "$svcs_tmp"
 
   if [[ -z "$svc_list" ]]; then
     return 0
@@ -410,7 +422,9 @@ print(' '.join(svcs) if svcs else '')
   echo ""
 
   # Diagnose each failing service using the existing diagnose command
-  for svc in $svc_list; do
+  local -a svc_list_arr
+  read -ra svc_list_arr <<< "$svc_list"
+  for svc in "${svc_list_arr[@]}"; do
     # Check if this service is in our known list
     local known=false
     for s in ${ALL_SERVICES}; do

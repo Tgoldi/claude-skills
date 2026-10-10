@@ -56,7 +56,7 @@ The agent should then:
   const checkOut = runScript('live-inject.mjs', ['--check']);
   const checkResult = safeParse(checkOut);
   if (!checkResult || !checkResult.ok) {
-    console.log(JSON.stringify(checkResult || { ok: false, error: 'check_failed', raw: checkOut }));
+    console.log(JSON.stringify(checkResult || { ok: false, error: 'check_failed' }));
     process.exit(0);
   }
 
@@ -74,7 +74,7 @@ The agent should then:
     console.log(JSON.stringify({
       ok: false,
       error: 'inject_failed',
-      detail: injectResult || injectOut,
+      detail: injectResult ? (injectResult.error || 'inject_failed') : 'inject_failed',
       serverPort: serverInfo.port,
     }));
     process.exit(1);

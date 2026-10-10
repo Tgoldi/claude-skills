@@ -75,43 +75,15 @@ $allfunctioninfo
 
 ## Azure Device Code Login Flow
 
-### Initiate Device Code Login
-
-```powershell
-$body = @{
-    "client_id" = "1950a258-227b-4e31-a9cf-717495945fc2"
-    "resource"  = "https://graph.microsoft.com"
-}
-$UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36"
-$Headers = @{}
-$Headers["User-Agent"] = $UserAgent
-$authResponse = Invoke-RestMethod `
-    -UseBasicParsing `
-    -Method Post `
-    -Uri "https://login.microsoftonline.com/common/oauth2/devicecode?api-version=1.0" `
-    -Headers $Headers `
-    -Body $body
-$authResponse
-```
-
-Navigate to https://microsoft.com/devicelogin and enter the code.
-
-### Retrieve Access Tokens
-
-```powershell
-$body = @{
-    "client_id"  = "1950a258-227b-4e31-a9cf-717495945fc2"
-    "grant_type" = "urn:ietf:params:oauth:grant-type:device_code"
-    "code"       = $authResponse.device_code
-}
-$Tokens = Invoke-RestMethod `
-    -UseBasicParsing `
-    -Method Post `
-    -Uri "https://login.microsoftonline.com/Common/oauth2/token?api-version=1.0" `
-    -Headers $Headers `
-    -Body $body
-$Tokens
-```
+> **RESTRICTED — AUTHORISED ENGAGEMENTS ONLY.** The device-code flow below can be used to generate
+> phishing-style login prompts and to retrieve live OAuth tokens. It must only be executed against
+> tenants you are explicitly contracted and authorised to test, under a signed scope-of-work, and
+> with prior written client approval for this specific technique. Do not run this against any
+> tenant without that documented authorisation, and do not include it in general-purpose or
+> default skill sets, training material, or tooling that could be run outside that engagement
+> context. The concrete client ID, request/response handling, and token-retrieval body have been
+> removed from this reference; consult your engagement lead or a vetted, access-controlled internal
+> runbook for the authorised implementation.
 
 ## Azure Managed Identity Token Retrieval
 
