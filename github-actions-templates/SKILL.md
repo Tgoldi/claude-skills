@@ -270,15 +270,25 @@ on:
   pull_request:
     branches: [ main ]
 
+# Least privilege: the default token is read-only; jobs request more only if needed
+permissions:
+  contents: read
+
 jobs:
   security:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write  # required only to upload SARIF results
 
     steps:
     - uses: actions/checkout@v4
 
+    # Third-party actions MUST be pinned to a full-length commit SHA, never a
+    # branch such as @master. Replace <FULL_COMMIT_SHA> with the SHA of the
+    # release you have reviewed (keep the version in the trailing comment).
     - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
+      uses: aquasecurity/trivy-action@<FULL_COMMIT_SHA>  # vX.Y.Z
       with:
         scan-type: 'fs'
         scan-ref: '.'
@@ -291,7 +301,7 @@ jobs:
         sarif_file: 'trivy-results.sarif'
 
     - name: Run Snyk Security Scan
-      uses: snyk/actions/node@master
+      uses: snyk/actions/node@<FULL_COMMIT_SHA>  # vX.Y.Z
       env:
         SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 ```

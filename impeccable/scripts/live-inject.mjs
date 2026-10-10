@@ -19,6 +19,20 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = process.env.IMPECCABLE_LIVE_CONFIG || path.join(__dirname, 'config.json');
+/**
+ * Resolve relFile against rootDir and return the absolute path only if it
+ * stays inside rootDir. Returns null for anything that escapes the root.
+ */
+function resolveInsideRoot(rootDir, relFile) {
+  const root = path.resolve(rootDir);
+  const abs = path.resolve(root, relFile);
+  const rel = path.relative(root, abs);
+  if (rel === '' || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
+    return null;
+  }
+  return abs;
+}
+
 const MARKER_OPEN_TEXT = 'impeccable-live-start';
 const MARKER_CLOSE_TEXT = 'impeccable-live-end';
 
@@ -78,14 +92,21 @@ Output (JSON):
     console.error(JSON.stringify({ ok: false, error: 'config_missing', path: CONFIG_PATH }));
     process.exit(1);
   }
-  const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-  validateConfig(config);
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    validateConfig(config);
+  } catch (err) {
+    console.error(JSON.stringify({ ok: false, error: 'config_invalid', message: err.message, path: CONFIG_PATH }));
+    process.exit(1);
+  }
 
   const resolvedFiles = resolveFiles(process.cwd(), config);
 
   if (args.includes('--remove')) {
     const results = resolvedFiles.map((relFile) => {
-      const absFile = path.resolve(process.cwd(), relFile);
+      const absFile = resolveInsideRoot(process.cwd(), relFile);
+      if (!absFile) return { file: relFile, error: 'path_outside_root' };
       if (!fs.existsSync(absFile)) return { file: relFile, error: 'file_not_found' };
       const content = fs.readFileSync(absFile, 'utf-8');
       const detagged = removeTag(content, config.commentSyntax);
@@ -111,7 +132,8 @@ Output (JSON):
   }
 
   const results = resolvedFiles.map((relFile) => {
-    const absFile = path.resolve(process.cwd(), relFile);
+    const absFile = resolveInsideRoot(process.cwd(), relFile);
+    if (!absFile) return { file: relFile, error: 'path_outside_root' };
     if (!fs.existsSync(absFile)) return { file: relFile, error: 'file_not_found' };
     const content = fs.readFileSync(absFile, 'utf-8');
     const withoutOld = revertCspMeta(removeTag(content, config.commentSyntax));
@@ -155,6 +177,11 @@ export function resolveFiles(rootDir, config) {
       // Literal path — include even if it doesn't exist yet; the caller
       // reports file_not_found per-entry. Exclude list doesn't apply to
       // explicit literal entries (user named it on purpose).
+      // Reject paths that escape the project root.
+      const relToRoot = path.relative(path.resolve(rootDir), path.resolve(rootDir, pat));
+      if (relToRoot === '' || relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) {
+        continue;
+      }
       if (!seen.has(pat)) {
         seen.add(pat);
         out.push(pat);

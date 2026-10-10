@@ -72,18 +72,33 @@ class SearchClient:
             with urllib.request.urlopen(req, timeout=60) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            error_body = e.read().decode("utf-8")
             try:
-                return json.loads(error_body)
-            except json.JSONDecodeError:
-                return {"success": False, "error": {"code": str(e.code), "message": error_body}}
-        except urllib.error.URLError as e:
-            return {"success": False, "error": {"code": "NETWORK_ERROR", "message": str(e.reason)}}
+                e.read()
+            except Exception:
+                pass
+            print(f"Upstream HTTP error {e.code} for {endpoint}", file=sys.stderr)
+            return {"success": False, "error": {"code": str(e.code), "message": "Upstream request failed"}}
+        except urllib.error.URLError:
+            return {"success": False, "error": {"code": "NETWORK_ERROR", "message": "Network error contacting upstream service"}}
     
     # ==================== Search APIs ====================
     
+    MAX_RESULTS_CAP = 50
+
+    @classmethod
+    def _clamp_results(cls, max_results: int) -> int:
+        """Validate and cap the requested result count."""
+        try:
+            max_results = int(max_results)
+        except (TypeError, ValueError):
+            raise ValueError("max_results must be an integer")
+        if max_results < 1:
+            raise ValueError("max_results must be a positive integer")
+        return min(max_results, cls.MAX_RESULTS_CAP)
+
     def web_search(self, query: str, max_results: int = 10) -> Dict[str, Any]:
         """Perform a web search."""
+        max_results = self._clamp_results(max_results)
         return self._request("POST", "/scholar/search/web", params={
             "query": query,
             "max_num_results": max_results
@@ -97,6 +112,7 @@ class SearchClient:
         year_to: int = None
     ) -> Dict[str, Any]:
         """Search academic papers."""
+        max_results = self._clamp_results(max_results)
         params = {
             "query": query,
             "max_num_results": max_results
@@ -109,6 +125,7 @@ class SearchClient:
     
     def smart_search(self, query: str, max_results: int = 10) -> Dict[str, Any]:
         """Perform intelligent search combining web and academic results."""
+        max_results = self._clamp_results(max_results)
         return self._request("POST", "/scholar/search/smart", params={
             "query": query,
             "max_num_results": max_results
@@ -116,6 +133,7 @@ class SearchClient:
     
     def full_search(self, query: str, max_results: int = 10) -> Dict[str, Any]:
         """Perform full text search with page content."""
+        max_results = self._clamp_results(max_results)
         return self._request("POST", "/search/full", params={
             "query": query,
             "max_num_results": max_results
@@ -156,6 +174,7 @@ class SearchClient:
         Phase 1: Parallel retrieval from Scholar, Web, Smart, Tavily
         Phase 2: Meta-analysis with confidence scoring
         """
+        max_results = self._clamp_results(max_results)
         # Phase 1: Parallel Discovery
         sources = {}
         errors = []
@@ -372,6 +391,10 @@ Examples:
         client = SearchClient()
     except ValueError as e:
         print(json.dumps({"success": False, "error": {"code": "AUTH_ERROR", "message": str(e)}}))
+        sys.exit(1)
+
+    if hasattr(args, "count") and args.count is not None and args.count < 1:
+        print(json.dumps({"success": False, "error": {"code": "INVALID_ARGUMENT", "message": "--count must be a positive integer"}}))
         sys.exit(1)
     
     result = None

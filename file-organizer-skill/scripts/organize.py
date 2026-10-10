@@ -116,13 +116,35 @@ class FileOrganizer:
             logger.error("Log file not found.")
             return
 
+        # The history file must live in the root directory being restored
+        root_real = os.path.realpath(self.root_dir)
+        if os.path.dirname(os.path.realpath(log_file)) != root_real:
+            logger.error("History file must be located inside the root directory.")
+            return
+
         with open(log_file, 'r') as f:
             history = json.load(f)
-        
+
+        if not isinstance(history, list):
+            logger.error("Invalid history file format.")
+            return
+
+        def inside_root(p):
+            real = os.path.realpath(p)
+            return real == root_real or real.startswith(root_real + os.sep)
+
         logger.info(f"Undoing {len(history)} operations...")
         for item in reversed(history):
+            if not isinstance(item, dict) or not isinstance(item.get('src'), str) or not isinstance(item.get('dst'), str):
+                logger.error(f"Skipping malformed history entry: {item!r}")
+                continue
             src = item['src']
             dst = item['dst']
+            if (not os.path.isabs(src) or not os.path.isabs(dst)
+                    or '..' in src.split(os.sep) or '..' in dst.split(os.sep)
+                    or not inside_root(src) or not inside_root(dst)):
+                logger.error(f"Skipping entry outside root directory: {src} <- {dst}")
+                continue
             try:
                 if os.path.exists(dst):
                     shutil.move(dst, src)

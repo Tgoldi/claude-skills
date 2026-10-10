@@ -56,21 +56,18 @@ npx impeccable --json [--fast] [target]
 
 The overlay is a **visual aid for the user**. It highlights issues directly in their browser. Do NOT scroll through the page to screenshot overlays. Instead, read the console output to get the results programmatically.
 
-1. **Start the live detection server**:
+1. **Start the live detection server** (only needed for result reporting; the detector script itself is NOT loaded from it):
    ```bash
    npx impeccable live &
    ```
-   Note the port printed to stdout (auto-assigned). Use `--port=PORT` to fix it.
+   Note the port printed to stdout (auto-assigned). Use `--port=PORT` to fix it. Only run this against pages the user owns (their own dev server or local files), never third-party sites.
 2. **Create a new tab** and navigate to the page (use dev server URL for local files, or direct URL). Do not reuse existing tabs.
 3. **Label the tab** via `javascript_tool` so the user can distinguish it:
    ```javascript
    document.title = '[Human] ' + document.title;
    ```
 4. **Scroll to top** to ensure the page is scrolled to the very top before injection
-5. **Inject** via `javascript_tool` (replace PORT with the port from step 1):
-   ```javascript
-   const s = document.createElement('script'); s.src = 'http://localhost:PORT/detect.js'; document.head.appendChild(s);
-   ```
+5. **Inject** via `javascript_tool`. Do NOT add a `<script src>` pointing at the live server: any process listening on that localhost port could then run arbitrary code in the page. Instead, read `detect.js` from the locally installed `impeccable` package on disk (the file the CLI already ships, e.g. under `node_modules/impeccable/`) and pass its contents to `javascript_tool` as inline code, so the injected code comes from the installed package rather than a network response. Only inject into pages the user owns.
 6. Wait 2-3 seconds for the detector to render overlays
 7. **Read results from console** using `read_console_messages` with pattern `impeccable`. The detector logs all findings with the `[impeccable]` prefix. Do NOT scroll through the page to take screenshots of the overlays.
 8. **Cleanup**: Stop the live server when done:

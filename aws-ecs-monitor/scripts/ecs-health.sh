@@ -29,12 +29,30 @@
 #   2 = script error (missing deps, missing config)
 # =============================================================================
 set -uo pipefail
+umask 077
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 if [[ -z "${ECS_CLUSTER:-}" ]]; then
   echo "ERROR: ECS_CLUSTER environment variable is required" >&2
+  exit 2
+fi
+
+if [[ ! "${ECS_CLUSTER}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+  echo "ERROR: ECS_CLUSTER contains invalid characters" >&2
+  exit 2
+fi
+if [[ ! "${ECS_REGION:-us-east-1}" =~ ^[A-Za-z0-9-]+$ ]]; then
+  echo "ERROR: ECS_REGION contains invalid characters" >&2
+  exit 2
+fi
+if [[ -n "${ECS_DOMAIN:-}" && ! "${ECS_DOMAIN}" =~ ^[A-Za-z0-9.-]+$ ]]; then
+  echo "ERROR: ECS_DOMAIN contains invalid characters" >&2
+  exit 2
+fi
+if [[ -n "${ECS_SERVICES:-}" && ! "${ECS_SERVICES}" =~ ^[A-Za-z0-9_.,-]+$ ]]; then
+  echo "ERROR: ECS_SERVICES contains invalid characters" >&2
   exit 2
 fi
 
@@ -128,14 +146,38 @@ if [[ -n "${ECS_HTTP_ENDPOINTS:-}" ]]; then
   for ep in "${ENDPOINTS[@]}"; do
     ep_name="${ep%%=*}"
     ep_url="${ep#*=}"
-    ep_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$ep_url" 2>/dev/null || echo "000")
-    ep_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 "$ep_url" 2>/dev/null || echo "0")
+    if [[ ! "$ep_name" =~ ^[A-Za-z0-9_-]+$ ]]; then
+      echo "Skipping endpoint with invalid name: $ep_name" >&2
+      continue
+    fi
+    if [[ ! "$ep_url" =~ ^https?://[A-Za-z0-9._~:/?#@!$\&\'()*+,\;=%-]+$ ]]; then
+      echo "Skipping endpoint with invalid url: $ep_name" >&2
+      continue
+    fi
+    ep_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 -- "$ep_url" 2>/dev/null || echo "000")
+    ep_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 -- "$ep_url" 2>/dev/null || echo "0")
+    [[ "$ep_status" =~ ^[0-9]{3}$ ]] || ep_status="000"
+    [[ "$ep_latency" =~ ^[0-9.]+$ ]] || ep_latency="0"
 
     # Any non-zero HTTP response means reachable
-    if [[ "$ep_status" != "000" && "$ep_status" != "" ]]; then
-      echo '{"status":"healthy","http_code":'"$ep_status"',"latency_s":'"$ep_latency"',"url":"'"$ep_url"'"}' > "$TMPDIR/http_${ep_name}.json"
+    if [[ "$ep_status" != "000" ]]; then
+      EP_STATUS="$ep_status" EP_LATENCY="$ep_latency" EP_URL="$ep_url" EP_STATE="healthy" EP_ERR="" \
+        python3 -c "
+import json, os
+r = {'status': os.environ['EP_STATE'], 'http_code': int(os.environ['EP_STATUS']), 'latency_s': float(os.environ['EP_LATENCY']), 'url': os.environ['EP_URL']}
+if os.environ['EP_ERR']:
+    r['error'] = os.environ['EP_ERR']
+print(json.dumps(r))
+" > "$TMPDIR/http_${ep_name}.json"
     else
-      echo '{"status":"unhealthy","http_code":'"$ep_status"',"latency_s":'"$ep_latency"',"url":"'"$ep_url"'","error":"Unreachable"}' > "$TMPDIR/http_${ep_name}.json"
+      EP_STATUS="$ep_status" EP_LATENCY="$ep_latency" EP_URL="$ep_url" EP_STATE="unhealthy" EP_ERR="Unreachable" \
+        python3 -c "
+import json, os
+r = {'status': os.environ['EP_STATE'], 'http_code': int(os.environ['EP_STATUS']), 'latency_s': float(os.environ['EP_LATENCY']), 'url': os.environ['EP_URL']}
+if os.environ['EP_ERR']:
+    r['error'] = os.environ['EP_ERR']
+print(json.dumps(r))
+" > "$TMPDIR/http_${ep_name}.json"
       OVERALL="unhealthy"
     fi
   done
@@ -402,12 +444,13 @@ if ! $QUIET && [[ "$OVERALL" != "healthy" ]]; then
       ECS_HEALTH_STATE="$STATUS_FILE" ECS_HEALTH_OUTDIR="$OUTDIR" \
       "$SCRIPT_DIR/cloudwatch-logs.sh" auto-diagnose --minutes 30 2>/dev/null)
     if [[ -n "$LOG_ANALYSIS" ]]; then
-      python3 -c "
-import json, sys
-with open('$alert_file') as f:
+      ALERT_FILE="$alert_file" python3 -c "
+import json, os, sys
+alert_path = os.environ['ALERT_FILE']
+with open(alert_path) as f:
     alert = json.load(f)
 alert['log_analysis'] = sys.stdin.read().strip()
-with open('$alert_file', 'w') as f:
+with open(alert_path, 'w') as f:
     json.dump(alert, f, indent=2)
 " <<< "$LOG_ANALYSIS" 2>/dev/null || true
     fi

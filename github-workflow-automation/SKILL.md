@@ -73,10 +73,10 @@ jobs:
                 role: "user",
                 content: `Review this PR diff and provide feedback:
                 
-                Changed files: ${{ steps.changed.outputs.files }}
+                Changed files: ${process.env.CHANGED_FILES}
                 
                 Diff:
-                ${{ steps.diff.outputs.diff }}
+                ${process.env.DIFF}
                 
                 Provide:
                 1. Summary of changes
@@ -97,6 +97,8 @@ jobs:
             });
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+          DIFF: ${{ steps.diff.outputs.diff }}
 ```
 
 ### 1.2 Review Comment Patterns
@@ -472,26 +474,30 @@ jobs:
 
       - name: Rollback
         run: |
-          git checkout ${{ steps.stable.outputs.version }}
+          git checkout "$STABLE_VERSION"
           # Deploy stable version
           npm run deploy
+        env:
+          STABLE_VERSION: ${{ steps.stable.outputs.version }}
+
+      - name: Build Slack payload
+        id: payload
+        run: |
+          payload=$(jq -nc \
+            --arg version "$STABLE_VERSION" \
+            --arg reason "$REASON" \
+            --arg actor "$ACTOR" \
+            '{text: ("🔄 Production rolled back to " + $version), blocks: [{type: "section", text: {type: "mrkdwn", text: ("*Rollback executed*\n• Version: `" + $version + "`\n• Reason: " + $reason + "\n• Triggered by: " + $actor)}}]}')
+          echo "payload=$payload" >> $GITHUB_OUTPUT
+        env:
+          STABLE_VERSION: ${{ steps.stable.outputs.version }}
+          REASON: ${{ inputs.reason }}
+          ACTOR: ${{ github.actor }}
 
       - name: Notify team
         uses: slackapi/slack-github-action@v1
         with:
-          payload: |
-            {
-              "text": "🔄 Production rolled back to ${{ steps.stable.outputs.version }}",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Rollback executed*\n• Version: `${{ steps.stable.outputs.version }}`\n• Reason: ${{ inputs.reason }}\n• Triggered by: ${{ github.actor }}"
-                  }
-                }
-              ]
-            }
+          payload: ${{ steps.payload.outputs.payload }}
 ```
 
 ---

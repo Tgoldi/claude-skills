@@ -44,8 +44,9 @@ Parameters:
 
   CorsAllowedOrigins:
     Type: String
-    Default: '*'
-    Description: CORS allowed origins for API Gateway
+    AllowedPattern: '^https?://[^*\\s]+$'
+    ConstraintDescription: Must be a specific origin (e.g. https://app.example.org), wildcards are not allowed
+    Description: CORS allowed origin for API Gateway (required, no wildcard)
 
 Resources:
   # DynamoDB Table
@@ -101,7 +102,6 @@ Resources:
                   - dynamodb:UpdateItem
                   - dynamodb:DeleteItem
                   - dynamodb:Query
-                  - dynamodb:Scan
                 Resource: !GetAtt {self.app_name.replace('-', '')}Table.Arn
 
   # Lambda Function
@@ -537,8 +537,7 @@ resource "aws_iam_role_policy" "dynamodb" {{
         "dynamodb:PutItem",
         "dynamodb:UpdateItem",
         "dynamodb:DeleteItem",
-        "dynamodb:Query",
-        "dynamodb:Scan"
+        "dynamodb:Query"
       ]
       Resource = aws_dynamodb_table.main.arn
     }}]
