@@ -128,16 +128,33 @@ if [[ -n "${ECS_HTTP_ENDPOINTS:-}" ]]; then
   for ep in "${ENDPOINTS[@]}"; do
     ep_name="${ep%%=*}"
     ep_url="${ep#*=}"
-    ep_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$ep_url" 2>/dev/null || echo "000")
-    ep_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 "$ep_url" 2>/dev/null || echo "0")
+    if [[ ! "$ep_name" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+      echo "WARN: skipping endpoint with invalid name: $ep_name" >&2
+      continue
+    fi
+    if [[ ! "$ep_url" =~ ^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._/?\&=%+~#,-]*)?$ ]]; then
+      echo "WARN: skipping endpoint '$ep_name' with invalid URL (https URLs without userinfo only)" >&2
+      continue
+    fi
+    ep_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 --proto '=https' -- "$ep_url" 2>/dev/null || echo "000")
+    ep_latency=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 --proto '=https' -- "$ep_url" 2>/dev/null || echo "0")
 
     # Any non-zero HTTP response means reachable
     if [[ "$ep_status" != "000" && "$ep_status" != "" ]]; then
-      echo '{"status":"healthy","http_code":'"$ep_status"',"latency_s":'"$ep_latency"',"url":"'"$ep_url"'"}' > "$TMPDIR/http_${ep_name}.json"
+      ep_health="healthy"
     else
-      echo '{"status":"unhealthy","http_code":'"$ep_status"',"latency_s":'"$ep_latency"',"url":"'"$ep_url"'","error":"Unreachable"}' > "$TMPDIR/http_${ep_name}.json"
+      ep_health="unhealthy"
       OVERALL="unhealthy"
     fi
+    EP_HEALTH="$ep_health" EP_STATUS="$ep_status" EP_LATENCY="$ep_latency" EP_URL="$ep_url" \
+      python3 -c "
+import json, os
+r = {'status': os.environ['EP_HEALTH'], 'http_code': int(os.environ['EP_STATUS'] or 0),
+     'latency_s': float(os.environ['EP_LATENCY'] or 0), 'url': os.environ['EP_URL']}
+if r['status'] != 'healthy':
+    r['error'] = 'Unreachable'
+print(json.dumps(r))
+" > "$TMPDIR/http_${ep_name}.json"
   done
 fi
 
@@ -222,11 +239,12 @@ fi
 # ---------------------------------------------------------------------------
 # 4. ALB Target Group Health
 # ---------------------------------------------------------------------------
-alb_result=$(python3 -c "
-import json, subprocess, sys
+alb_result=$(REGION="$REGION" python3 -c "
+import json, os, subprocess, sys
 
+REGION = os.environ['REGION']
 tg_result = subprocess.run(
-    ['aws', 'elbv2', 'describe-target-groups', '--region', '$REGION', '--output', 'json'],
+    ['aws', 'elbv2', 'describe-target-groups', '--region', REGION, '--output', 'json'],
     capture_output=True, text=True
 )
 if tg_result.returncode != 0:
@@ -243,7 +261,7 @@ for tg in tgs:
 
     health_result = subprocess.run(
         ['aws', 'elbv2', 'describe-target-health', '--target-group-arn', arn,
-         '--region', '$REGION', '--output', 'json'],
+         '--region', REGION, '--output', 'json'],
         capture_output=True, text=True
     )
     if health_result.returncode != 0:
@@ -322,10 +340,10 @@ fi
 # ---------------------------------------------------------------------------
 # Build Final JSON
 # ---------------------------------------------------------------------------
-FINAL_JSON=$(python3 -c "
+FINAL_JSON=$(TMPDIR="$TMPDIR" NOW_ISO="$NOW_ISO" NOW="$NOW" OVERALL="$OVERALL" CLUSTER="$CLUSTER" REGION="$REGION" DOMAIN="$DOMAIN" python3 -c "
 import json, os, glob
 
-tmpdir = '$TMPDIR'
+tmpdir = os.environ['TMPDIR']
 checks = {}
 for f in glob.glob(os.path.join(tmpdir, '*.json')):
     name = os.path.splitext(os.path.basename(f))[0]
@@ -333,16 +351,16 @@ for f in glob.glob(os.path.join(tmpdir, '*.json')):
         checks[name] = json.load(fh)
 
 result = {
-    'timestamp': '$NOW_ISO',
-    'epoch': $NOW,
-    'overall': '$OVERALL',
-    'cluster': '$CLUSTER',
-    'region': '$REGION',
+    'timestamp': os.environ['NOW_ISO'],
+    'epoch': int(os.environ['NOW']),
+    'overall': os.environ['OVERALL'],
+    'cluster': os.environ['CLUSTER'],
+    'region': os.environ['REGION'],
     'checks': checks
 }
 
 # Include domain if configured
-domain = '$DOMAIN'
+domain = os.environ['DOMAIN']
 if domain:
     result['domain'] = domain
 
@@ -365,8 +383,8 @@ if ! $QUIET && ! $JSON_ONLY; then
   if [[ "$OVERALL" == "healthy" ]]; then
     text="✅ ECS health check ($CLUSTER): all systems healthy"
   else
-    issues=$(echo "$FINAL_JSON" | python3 -c "
-import json, sys
+    issues=$(echo "$FINAL_JSON" | OVERALL="$OVERALL" python3 -c "
+import json, os, sys
 data = json.load(sys.stdin)
 issues = []
 for name, check in data['checks'].items():
@@ -377,7 +395,7 @@ for name, check in data['checks'].items():
             issues.append(f'{name}: {check[\"error\"]}')
         else:
             issues.append(f'{name}: {check.get(\"status\", \"unknown\")}')
-print('; '.join(issues[:5]) if issues else '$OVERALL')
+print('; '.join(issues[:5]) if issues else os.environ['OVERALL'])
 " 2>/dev/null)
 
     if [[ "$OVERALL" == "degraded" ]]; then
@@ -402,12 +420,13 @@ if ! $QUIET && [[ "$OVERALL" != "healthy" ]]; then
       ECS_HEALTH_STATE="$STATUS_FILE" ECS_HEALTH_OUTDIR="$OUTDIR" \
       "$SCRIPT_DIR/cloudwatch-logs.sh" auto-diagnose --minutes 30 2>/dev/null)
     if [[ -n "$LOG_ANALYSIS" ]]; then
-      python3 -c "
-import json, sys
-with open('$alert_file') as f:
+      ALERT_FILE="$alert_file" python3 -c "
+import json, os, sys
+alert_file = os.environ['ALERT_FILE']
+with open(alert_file) as f:
     alert = json.load(f)
 alert['log_analysis'] = sys.stdin.read().strip()
-with open('$alert_file', 'w') as f:
+with open(alert_file, 'w') as f:
     json.dump(alert, f, indent=2)
 " <<< "$LOG_ANALYSIS" 2>/dev/null || true
     fi

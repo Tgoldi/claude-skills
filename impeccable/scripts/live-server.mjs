@@ -66,6 +66,8 @@ const state = {
 // Cap per-annotation upload size. A full 1920×1080 PNG is typically <1 MB;
 // cap at 10 MB to guard against runaway writes from a misbehaving client.
 const MAX_ANNOTATION_BYTES = 10 * 1024 * 1024;
+// Cap for JSON event bodies posted to /events.
+const MAX_EVENT_BODY_BYTES = 1024 * 1024;
 
 function enqueueEvent(event) {
   if (state.pendingPolls.length > 0) {
@@ -184,12 +186,34 @@ function validateEvent(msg) {
 // HTTP request handler
 // ---------------------------------------------------------------------------
 
+const EXTRA_ALLOWED_ORIGINS = (process.env.IMPECCABLE_ALLOWED_ORIGINS || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+
+function isAllowedOrigin(origin) {
+  if (!origin) return false;
+  if (EXTRA_ALLOWED_ORIGINS.includes(origin)) return true;
+  try {
+    const u = new URL(origin);
+    return (u.protocol === 'http:' || u.protocol === 'https:') &&
+      (u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]');
+  } catch { return false; }
+}
+
 function createRequestHandler({ detectScript, livePath }) {
   return (req, res) => {
     const url = new URL(req.url, `http://localhost:${state.port}`);
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    const origin = req.headers.origin;
+    if (origin) {
+      if (!isAllowedOrigin(origin)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
+        res.end('Forbidden origin');
+        return;
+      }
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    }
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
     const p = url.pathname;
@@ -381,9 +405,10 @@ function createRequestHandler({ detectScript, livePath }) {
       const token = url.searchParams.get('token');
       if (token !== state.token) { res.writeHead(401); res.end('Unauthorized'); return; }
       const filePath = url.searchParams.get('path');
-      if (!filePath || filePath.includes('..')) { res.writeHead(400); res.end('Bad path'); return; }
+      if (!filePath || filePath.includes('..') || path.isAbsolute(filePath)) { res.writeHead(400); res.end('Bad path'); return; }
+      const rootDir = process.cwd() + path.sep;
       const absPath = path.resolve(process.cwd(), filePath);
-      if (!absPath.startsWith(process.cwd())) { res.writeHead(403); res.end('Forbidden'); return; }
+      if (!absPath.startsWith(rootDir)) { res.writeHead(403); res.end('Forbidden'); return; }
       let content;
       try { content = fs.readFileSync(absPath, 'utf-8'); }
       catch { res.writeHead(404); res.end('File not found'); return; }
@@ -430,8 +455,19 @@ function createRequestHandler({ detectScript, livePath }) {
     // --- Browser→server events (replaces WebSocket messages) ---
     if (p === '/events' && req.method === 'POST') {
       let body = '';
-      req.on('data', (c) => { body += c; });
+      let tooLarge = false;
+      req.on('data', (c) => {
+        if (tooLarge) return;
+        body += c;
+        if (body.length > MAX_EVENT_BODY_BYTES) {
+          tooLarge = true;
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Payload too large' }));
+          req.destroy();
+        }
+      });
       req.on('end', () => {
+        if (tooLarge) return;
         let msg;
         try { msg = JSON.parse(body); } catch {
           res.writeHead(400, { 'Content-Type': 'application/json' });

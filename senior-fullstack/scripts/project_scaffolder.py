@@ -15,6 +15,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -271,7 +272,7 @@ from typing import List
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://user:pass@localhost:5432/db"
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
-    SECRET_KEY: str = "change-me-in-production"
+    SECRET_KEY: str  # required: set via environment / .env (no insecure default)
 
     class Config:
         env_file = ".env"
@@ -360,10 +361,16 @@ app.get("/health", (_, res) => res.json({ status: "healthy" }));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 ''',
-        "config.ts": '''export const config = {
+        "config.ts": '''function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} environment variable is required`);
+  return value;
+}
+
+export const config = {
   PORT: parseInt(process.env.PORT || "8000"),
   MONGODB_URI: process.env.MONGODB_URI || "mongodb://localhost:27017/app",
-  JWT_SECRET: process.env.JWT_SECRET || "change-me",
+  JWT_SECRET: requireEnv("JWT_SECRET"),
 };
 ''',
         "database.ts": '''import mongoose from "mongoose";
@@ -402,13 +409,35 @@ const userSchema = new Schema<IUser>({
 
 export const User = mongoose.model<IUser>("User", userSchema);
 ''',
-        "auth.ts": '''import { Request, Response, NextFunction } from "express";
+        "auth.ts": '''import { createHmac, timingSafeEqual } from "crypto";
+import { Request, Response, NextFunction } from "express";
+import { config } from "../config";
+
+// Verifies an HS256 JWT signed with JWT_SECRET (no extra dependencies required).
+function verifyJwt(token: string, secret: string): boolean {
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const header = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
+    if (header.alg !== "HS256") return false;
+    const expected = createHmac("sha256", secret).update(`${parts[0]}.${parts[1]}`).digest();
+    const actual = Buffer.from(parts[2], "base64url");
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return false;
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    if (typeof payload.exp === "number" && payload.exp * 1000 < Date.now()) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function authMiddleware(req: Request, res: Response, next: NextFunction) {
   const token = req.headers.authorization?.replace("Bearer ", "");
   if (!token) return res.status(401).json({ error: "Authentication required" });
-  // Verify token
-  next();
+  if (!verifyJwt(token, config.JWT_SECRET)) {
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+  return next();
 }
 ''',
         "error.ts": '''import { Request, Response, NextFunction } from "express";
@@ -521,8 +550,12 @@ export default defineConfig({
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "change-me")
-DEBUG = os.environ.get("DEBUG", "True") == "True"
+from django.core.exceptions import ImproperlyConfigured
+
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    raise ImproperlyConfigured("DJANGO_SECRET_KEY environment variable is required")
+DEBUG = os.environ.get("DEBUG", "False") == "True"
 ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
 INSTALLED_APPS = [
@@ -731,7 +764,16 @@ def create_project(template_name: str, project_name: str, output_dir: Path) -> D
         }
 
     template = TEMPLATES[template_name]
-    project_dir = output_dir / project_name
+
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", project_name or ""):
+        return {
+            "success": False,
+            "error": f"Invalid project name: {project_name!r}. Use letters, digits, '.', '_' or '-' (no path separators)."
+        }
+
+    project_dir = (output_dir / project_name).resolve()
+    if not project_dir.is_relative_to(output_dir.resolve()):
+        return {"success": False, "error": f"Project path escapes output directory: {project_name!r}"}
 
     if project_dir.exists():
         return {"success": False, "error": f"Directory exists: {project_dir}"}

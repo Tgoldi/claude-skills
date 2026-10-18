@@ -105,7 +105,7 @@ Output (JSON):
   // Insert mode — need --port
   const portIdx = args.indexOf('--port');
   const port = portIdx !== -1 ? parseInt(args[portIdx + 1], 10) : NaN;
-  if (!Number.isFinite(port)) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
     console.error(JSON.stringify({ ok: false, error: 'missing_port' }));
     process.exit(1);
   }

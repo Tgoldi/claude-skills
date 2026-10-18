@@ -127,7 +127,7 @@ cmd_pull() {
     if $JSON_OUT; then
       echo "$result" | python3 -c "
 import json,sys; d=json.load(sys.stdin); e=d.get('events',[])
-print(json.dumps({'service':'$svc','log_group':'$lg','count':len(e),'events':e},indent=2))"
+print(json.dumps({'service':sys.argv[1],'log_group':sys.argv[2],'count':len(e),'events':e},indent=2))" "$svc" "$lg"
     else
       local count; count=$(echo "$result" | python3 -c "import json,sys;print(len(json.load(sys.stdin).get('events',[])))" 2>/dev/null)
       echo "=== $svc ($lg) — $count events in last ${MINUTES}m ==="
@@ -156,7 +156,7 @@ cmd_errors() {
       if $JSON_OUT; then
         echo "$result" | python3 -c "
 import json,sys; d=json.load(sys.stdin); e=d.get('events',[])
-print(json.dumps({'service':'$svc','error_count':len(e),'events':e},indent=2))"
+print(json.dumps({'service':sys.argv[1],'error_count':len(e),'events':e},indent=2))" "$svc"
       else
         echo "🔴 $svc — $count error(s) in last ${MINUTES}m:"
         echo "$result" | python3 -c "
@@ -182,8 +182,9 @@ cmd_restarts() {
   local orig_filter="$FILTER"
   FILTER='?"Shutting down" ?"Starting" ?"started" ?"Uvicorn running" ?"Server started" ?"next start" ?"listening" ?"gracefully" ?"SIGTERM" ?"signal"'
   for svc in $(resolve_services "$SERVICE"); do
-    pull_service_logs "$svc" | python3 -c "
-import json,sys,datetime,re
+    pull_service_logs "$svc" | CW_SVC="$svc" CW_MINUTES="$MINUTES" python3 -c "
+import json,sys,datetime,re,os
+svc=os.environ['CW_SVC']; minutes=os.environ['CW_MINUTES']
 events=json.load(sys.stdin).get('events',[])
 up_re=[r'(?i)(starting|started|listening|running on|ready)',r'(?i)(uvicorn running|next start|gin-gonic)']
 dn_re=[r'(?i)(shutting down|stopped|sigterm|graceful)']
@@ -192,7 +193,7 @@ for e in events:
     m,ts=e.get('message','').strip(),datetime.datetime.fromtimestamp(e['timestamp']/1000,datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     if any(re.search(p,m) for p in up_re): ups.append((ts,m[:200]))
     if any(re.search(p,m) for p in dn_re): dns.append((ts,m[:200]))
-print(f'=== $svc — {len(ups)} startups, {len(dns)} shutdowns (~{min(len(ups),len(dns))} restarts) in last ${MINUTES}m ===')
+print(f'=== {svc} — {len(ups)} startups, {len(dns)} shutdowns (~{min(len(ups),len(dns))} restarts) in last {minutes}m ===')
 for ts,k,m in sorted([(t,'START',m) for t,m in ups]+[(t,'STOP',m) for t,m in dns]):
     print(f\"  {'🟢' if k=='START' else '🔴'} [{ts}] {m}\")
 print()" 2>/dev/null
@@ -345,9 +346,11 @@ cmd_auto_diagnose() {
 
   # Parse health file to find failing services and print header
   local failing_svcs
-  failing_svcs=$(python3 -c "
-import json, sys
-with open('$HEALTH_FILE') as f: health = json.load(f)
+  local ad_tmp
+  ad_tmp=$(mktemp) || { echo "ERROR: could not create temp file" >&2; exit 2; }
+  failing_svcs=$(HEALTH_FILE="$HEALTH_FILE" python3 -c "
+import json, sys, os
+with open(os.environ['HEALTH_FILE']) as f: health = json.load(f)
 overall = health.get('overall','unknown')
 checks = health.get('checks',{})
 print(f'Production Status: {overall} (from {health.get(\"timestamp\",\"unknown\")})', file=sys.stderr)
@@ -391,15 +394,15 @@ if not svcs:
 
 # Output service names to stdout for bash to consume
 print(' '.join(svcs) if svcs else '')
-" 2>&1 1>/tmp/ecs-ad-svcs.$$)
+" 2>&1 1>"$ad_tmp")
 
   # Print the header/issues (stderr was redirected to stdout above)
   echo "$failing_svcs"
 
   # Read the services list
   local svc_list
-  svc_list=$(cat /tmp/ecs-ad-svcs.$$ 2>/dev/null)
-  rm -f /tmp/ecs-ad-svcs.$$
+  svc_list=$(cat "$ad_tmp" 2>/dev/null)
+  rm -f "$ad_tmp"
 
   if [[ -z "$svc_list" ]]; then
     return 0

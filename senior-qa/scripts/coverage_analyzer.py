@@ -16,6 +16,7 @@ import sys
 import json
 import argparse
 import re
+import html as html_lib
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field, asdict
@@ -620,10 +621,10 @@ class ReportGenerator:
         for gap, severity in all_gaps[:15]:
             row_class = f"gap-{severity}" if severity in ['critical', 'high'] else ""
             html += f"""            <tr class="{row_class}">
-                <td>{severity.upper()}</td>
-                <td>{gap['file'].split('/')[-1]}</td>
-                <td>{gap['description']}</td>
-                <td>{gap['recommendation']}</td>
+                <td>{html_lib.escape(severity.upper())}</td>
+                <td>{html_lib.escape(gap['file'].split('/')[-1])}</td>
+                <td>{html_lib.escape(str(gap['description']))}</td>
+                <td>{html_lib.escape(str(gap['recommendation']))}</td>
             </tr>
 """
 
@@ -650,7 +651,7 @@ class ReportGenerator:
         for path, cov in sorted_files[:20]:
             short_path = path.split('/')[-1] if '/' in path else path
             html += f"""            <tr>
-                <td>{short_path}</td>
+                <td>{html_lib.escape(short_path)}</td>
                 <td>{cov.statement_pct:.1f}%</td>
                 <td>{cov.branch_pct:.1f}%</td>
                 <td>{cov.function_pct:.1f}%</td>

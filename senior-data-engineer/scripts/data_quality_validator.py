@@ -26,6 +26,7 @@ import re
 import argparse
 import logging
 import statistics
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple, Set
 from dataclasses import dataclass, field, asdict
@@ -468,10 +469,40 @@ class SchemaValidator(BaseValidator):
                 failures.append(i)
         return failures
 
+    MAX_PATTERN_LENGTH = 256
+    MAX_PATTERN_VALUE_LENGTH = 1000
+    MAX_PATTERN_SECONDS = 30.0
+
     def _validate_pattern(self, values: List[Any], pattern: str) -> List[int]:
-        """Return indices of values not matching the pattern"""
+        """Return indices of values not matching the pattern.
+
+        Schema patterns are treated as untrusted: they are length-capped,
+        backreferences are rejected, and matching runs against length-capped
+        input under an overall time budget so a pathological regex cannot
+        hang the process.
+        """
+        if len(pattern) > self.MAX_PATTERN_LENGTH:
+            raise ValueError(
+                f"Pattern too long ({len(pattern)} > {self.MAX_PATTERN_LENGTH} chars)"
+            )
+        if re.search(r'\\[1-9]|\(\?P=', pattern):
+            raise ValueError("Backreferences are not allowed in schema patterns")
         regex = re.compile(pattern)
-        return [i for i, v in enumerate(values) if not regex.match(str(v))]
+        deadline = time.monotonic() + self.MAX_PATTERN_SECONDS
+        failures = []
+        for i, v in enumerate(values):
+            if time.monotonic() > deadline:
+                raise ValueError(
+                    "Pattern validation exceeded time budget; pattern may be too complex"
+                )
+            s = str(v)
+            if len(s) > self.MAX_PATTERN_VALUE_LENGTH:
+                # Do not run the regex on oversized input; treat as non-matching
+                failures.append(i)
+                continue
+            if not regex.match(s):
+                failures.append(i)
+        return failures
 
     def _validate_primary_key(self, data: List[Dict], pk_columns: List[str]) -> List[ValidationResult]:
         """Validate primary key uniqueness"""
@@ -1240,6 +1271,9 @@ class ReportGenerator:
 class DataLoader:
     """Load data from various formats"""
 
+    MAX_FILE_BYTES = 500 * 1024 * 1024  # 500 MB
+    MAX_ROWS = 5_000_000
+
     @staticmethod
     def load(file_path: str) -> List[Dict]:
         """Load data from file"""
@@ -1247,6 +1281,12 @@ class DataLoader:
 
         if not path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
+
+        size = path.stat().st_size
+        if size > DataLoader.MAX_FILE_BYTES:
+            raise ValueError(
+                f"File too large ({size} bytes > {DataLoader.MAX_FILE_BYTES} byte limit)"
+            )
 
         suffix = path.suffix.lower()
 
@@ -1266,6 +1306,8 @@ class DataLoader:
         with open(file_path, 'r', newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
+                if len(data) >= DataLoader.MAX_ROWS:
+                    raise ValueError(f"Row limit exceeded ({DataLoader.MAX_ROWS} rows)")
                 data.append(dict(row))
         return data
 
@@ -1276,11 +1318,15 @@ class DataLoader:
             content = json.load(f)
 
         if isinstance(content, list):
+            if len(content) > DataLoader.MAX_ROWS:
+                raise ValueError(f"Row limit exceeded ({DataLoader.MAX_ROWS} rows)")
             return content
         elif isinstance(content, dict):
             # Check for common data keys
             for key in ['data', 'records', 'rows', 'items']:
                 if key in content and isinstance(content[key], list):
+                    if len(content[key]) > DataLoader.MAX_ROWS:
+                        raise ValueError(f"Row limit exceeded ({DataLoader.MAX_ROWS} rows)")
                     return content[key]
             return [content]
         else:
@@ -1294,6 +1340,8 @@ class DataLoader:
             for line in f:
                 line = line.strip()
                 if line:
+                    if len(data) >= DataLoader.MAX_ROWS:
+                        raise ValueError(f"Row limit exceeded ({DataLoader.MAX_ROWS} rows)")
                     data.append(json.loads(line))
         return data
 

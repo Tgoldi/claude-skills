@@ -25,6 +25,8 @@ class ABTestPlanner:
         'exploratory': 0.80  # 80% confidence
     }
 
+    MAX_ACTIVE_TESTS = 1000
+
     def __init__(self):
         """Initialize A/B test planner."""
         self.active_tests = []
@@ -74,6 +76,9 @@ class ABTestPlanner:
         }
 
         self.active_tests.append(test_design)
+        # Evict oldest tests to keep memory bounded
+        if len(self.active_tests) > self.MAX_ACTIVE_TESTS:
+            self.active_tests = self.active_tests[-self.MAX_ACTIVE_TESTS:]
         return test_design
 
     def calculate_sample_size(
@@ -95,6 +100,16 @@ class ABTestPlanner:
         Returns:
             Sample size calculation with duration estimates
         """
+        if not (0 < baseline_conversion < 1):
+            return {'error': 'baseline_conversion must be between 0 and 1 (exclusive)'}
+        if minimum_detectable_effect <= 0:
+            return {'error': 'minimum_detectable_effect must be greater than 0'}
+        expected_b = baseline_conversion * (1 + minimum_detectable_effect)
+        if expected_b >= 1:
+            return {'error': 'baseline_conversion * (1 + minimum_detectable_effect) must be less than 1'}
+        if confidence_level not in self.CONFIDENCE_LEVELS:
+            return {'error': f'confidence_level must be one of {list(self.CONFIDENCE_LEVELS)}'}
+
         alpha = 1 - self.CONFIDENCE_LEVELS[confidence_level]
         beta = 1 - power
 

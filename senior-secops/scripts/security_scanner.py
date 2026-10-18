@@ -56,6 +56,10 @@ class SecurityScanner:
         '.yml', '.yaml', '.json', '.xml', '.env', '.conf', '.config'
     }
 
+    # Maximum file size to scan (bytes) and maximum line length to match against
+    MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+    MAX_LINE_LENGTH = 2000
+
     # Directories to skip
     SKIP_DIRS = {
         'node_modules', '.git', '__pycache__', '.venv', 'venv',
@@ -84,25 +88,25 @@ class SecurityScanner:
 
     # SQL injection patterns
     SQL_INJECTION_PATTERNS = [
-        (r'execute\s*\(\s*["\']?\s*SELECT.*\+.*\+',
+        (r'execute\s*\(\s*["\']?\s*SELECT.{0,500}\+.{0,500}\+',
          'Dynamic SQL query with string concatenation'),
         (r'execute\s*\(\s*f["\']SELECT',
          'F-string SQL query (Python)'),
-        (r'cursor\.execute\s*\(\s*["\'].*%s.*%\s*\(',
+        (r'cursor\.execute\s*\(\s*["\'].{0,500}%s.{0,500}%\s*\(',
          'Unsafe string formatting in SQL'),
-        (r'query\s*\(\s*[`"\']SELECT.*\$\{',
+        (r'query\s*\(\s*[`"\']SELECT.{0,500}\$\{',
          'Template literal SQL injection (JavaScript)'),
-        (r'\.query\s*\(\s*["\'].*\+.*\+',
+        (r'\.query\s*\(\s*["\'].{0,500}\+.{0,500}\+',
          'String concatenation in SQL query'),
     ]
 
     # XSS patterns
     XSS_PATTERNS = [
-        (r'innerHTML\s*=\s*[^;]+(?:user|input|param|query)',
+        (r'innerHTML\s*=\s*[^;]{1,500}(?:user|input|param|query)',
          'User input assigned to innerHTML'),
-        (r'document\.write\s*\([^;]*(?:user|input|param|query)',
+        (r'document\.write\s*\([^;]{0,500}(?:user|input|param|query)',
          'User input in document.write'),
-        (r'\.html\s*\(\s*[^)]*(?:user|input|param|query)',
+        (r'\.html\s*\(\s*[^)]{0,500}(?:user|input|param|query)',
          'User input in jQuery .html()'),
         (r'dangerouslySetInnerHTML',
          'React dangerouslySetInnerHTML usage'),
@@ -112,21 +116,21 @@ class SecurityScanner:
 
     # Command injection patterns (detection rules for finding unsafe patterns)
     COMMAND_INJECTION_PATTERNS = [
-        (r'subprocess\.(?:call|run|Popen)\s*\([^)]*shell\s*=\s*True',
+        (r'subprocess\.(?:call|run|Popen)\s*\([^)]{0,500}shell\s*=\s*True',
          'Subprocess with shell=True'),
-        (r'exec\s*\(\s*[^)]*(?:user|input|param|request)',
+        (r'exec\s*\(\s*[^)]{0,500}(?:user|input|param|request)',
          'exec() with potential user input'),
-        (r'eval\s*\(\s*[^)]*(?:user|input|param|request)',
+        (r'eval\s*\(\s*[^)]{0,500}(?:user|input|param|request)',
          'eval() with potential user input'),
     ]
 
     # Path traversal patterns
     PATH_TRAVERSAL_PATTERNS = [
-        (r'open\s*\(\s*[^)]*(?:user|input|param|request)',
+        (r'open\s*\(\s*[^)]{0,500}(?:user|input|param|request)',
          'File open with potential user input'),
-        (r'readFile\s*\(\s*[^)]*(?:user|input|param|req\.|query)',
+        (r'readFile\s*\(\s*[^)]{0,500}(?:user|input|param|req\.|query)',
          'File read with potential user input'),
-        (r'path\.join\s*\([^)]*(?:user|input|param|req\.|query)',
+        (r'path\.join\s*\([^)]{0,500}(?:user|input|param|req\.|query)',
          'Path.join with user input without validation'),
     ]
 
@@ -226,7 +230,21 @@ class SecurityScanner:
     def _scan_file(self, file_path: Path):
         """Scan a single file for security issues."""
         try:
-            content = file_path.read_text(encoding='utf-8', errors='ignore')
+            try:
+                if file_path.stat().st_size > self.MAX_FILE_SIZE:
+                    if self.verbose:
+                        print(f"  Skipped (too large): {file_path}")
+                    return
+            except OSError:
+                return
+
+            with open(file_path, 'rb') as fh:
+                raw = fh.read(self.MAX_FILE_SIZE + 1)
+            if len(raw) > self.MAX_FILE_SIZE:
+                if self.verbose:
+                    print(f"  Skipped (too large): {file_path}")
+                return
+            content = raw.decode('utf-8', errors='ignore')
             lines = content.split('\n')
 
             relative_path = str(file_path.relative_to(self.target_path) if self.target_path.is_dir() else file_path.name)
@@ -294,6 +312,8 @@ class SecurityScanner:
     ):
         """Scan lines for patterns."""
         for line_num, line in enumerate(lines, 1):
+            # Truncate very long lines to limit regex backtracking cost
+            line = line[:self.MAX_LINE_LENGTH]
             for pattern_tuple in patterns:
                 pattern = pattern_tuple[0]
                 description = pattern_tuple[1] if len(pattern_tuple) > 1 else title

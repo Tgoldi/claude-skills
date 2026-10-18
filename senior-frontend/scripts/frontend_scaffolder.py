@@ -14,6 +14,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -120,6 +121,25 @@ TEMPLATES = {
         ],
     },
 }
+
+# Pinned version ranges for feature dependencies
+FEATURE_DEP_VERSIONS = {
+    "next-auth": "^4.24.0",
+    "@auth/core": "^0.18.0",
+    "@tanstack/react-query": "^5.0.0",
+    "axios": "^1.6.0",
+    "react-hook-form": "^7.48.0",
+    "@hookform/resolvers": "^3.3.0",
+    "zod": "^3.22.0",
+    "vitest": "^1.0.0",
+    "@testing-library/react": "^14.1.0",
+    "@testing-library/jest-dom": "^6.1.0",
+    "@storybook/react-vite": "^7.6.0",
+    "@storybook/addon-essentials": "^7.6.0",
+}
+
+# Allowed project names: lowercase letters, digits, dots, dashes, underscores
+PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 # Feature modules that can be added
 FEATURES = {
@@ -643,7 +663,7 @@ def get_config_templates(name: str, template: str, features: List[str]) -> Dict[
     for feature in features:
         if feature in FEATURES:
             for dep in FEATURES[feature].get("dependencies", []):
-                deps[template]["dependencies"][dep] = "latest"
+                deps[template]["dependencies"][dep] = FEATURE_DEP_VERSIONS[dep]
 
     package_json = {
         "name": name,
@@ -841,7 +861,16 @@ def scaffold_project(
 ) -> Dict:
     """Scaffold a complete frontend project."""
     features = features or []
-    project_path = output_dir / name
+
+    if not PROJECT_NAME_RE.match(name) or name in (".", ".."):
+        return {
+            "error": "Invalid project name: use only lowercase letters, numbers, dots, dashes, and underscores"
+        }
+
+    base_dir = output_dir.resolve()
+    project_path = (base_dir / name).resolve()
+    if project_path.parent != base_dir:
+        return {"error": "Project path must be inside the output directory"}
 
     if project_path.exists() and not dry_run:
         return {"error": f"Directory already exists: {project_path}"}

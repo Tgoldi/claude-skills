@@ -44,8 +44,9 @@ Parameters:
 
   CorsAllowedOrigins:
     Type: String
-    Default: '*'
-    Description: CORS allowed origins for API Gateway
+    AllowedPattern: '^https://[^*]+$'
+    ConstraintDescription: Must be a specific https origin (wildcard '*' is not allowed)
+    Description: CORS allowed origin for API Gateway (required, no wildcard)
 
 Resources:
   # DynamoDB Table
@@ -168,9 +169,11 @@ Resources:
           RequireLowercase: true
           RequireNumbers: true
           RequireSymbols: false
-      MfaConfiguration: OPTIONAL
+      MfaConfiguration: 'ON'
       EnabledMfas:
         - SOFTWARE_TOKEN_MFA
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
       UserAttributeUpdateSettings:
         AttributesRequireVerificationBeforeUpdate:
           - email
@@ -249,6 +252,22 @@ export class {self.app_name.replace('-', '').title()}Stack extends cdk.Stack {{
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {{
     super(scope, id, props);
 
+    // Self sign-up is disabled unless explicitly enabled via context: -c selfSignUpEnabled=true
+    const selfSignUpEnabled = this.node.tryGetContext('selfSignUpEnabled') === 'true';
+
+    // Required: comma-separated list of specific allowed origins, e.g. -c corsAllowedOrigins=https://app.<your-domain>
+    const corsAllowedOriginsContext = this.node.tryGetContext('corsAllowedOrigins');
+    if (!corsAllowedOriginsContext) {{
+      throw new Error('Context "corsAllowedOrigins" is required (comma-separated list of origins)');
+    }}
+    const corsAllowedOrigins: string[] = String(corsAllowedOriginsContext)
+      .split(',')
+      .map((o: string) => o.trim())
+      .filter((o: string) => o.length > 0);
+    if (corsAllowedOrigins.length === 0 || corsAllowedOrigins.includes('*')) {{
+      throw new Error('"corsAllowedOrigins" must list specific origins; wildcard "*" is not allowed');
+    }}
+
     // DynamoDB Table
     const table = new dynamodb.Table(this, '{self.app_name}Table', {{
       tableName: `${{cdk.Stack.of(this).stackName}}-data`,
@@ -264,7 +283,7 @@ export class {self.app_name.replace('-', '').title()}Stack extends cdk.Stack {{
     // Cognito User Pool
     const userPool = new cognito.UserPool(this, '{self.app_name}UserPool', {{
       userPoolName: `${{cdk.Stack.of(this).stackName}}-users`,
-      selfSignUpEnabled: true,
+      selfSignUpEnabled: selfSignUpEnabled,
       signInAliases: {{ email: true }},
       autoVerify: {{ email: true }},
       passwordPolicy: {{
@@ -274,7 +293,7 @@ export class {self.app_name.replace('-', '').title()}Stack extends cdk.Stack {{
         requireDigits: true,
         requireSymbols: false,
       }},
-      mfa: cognito.Mfa.OPTIONAL,
+      mfa: cognito.Mfa.REQUIRED,
       mfaSecondFactor: {{
         sms: false,
         otp: true,
@@ -313,7 +332,7 @@ export class {self.app_name.replace('-', '').title()}Stack extends cdk.Stack {{
       restApiName: `${{cdk.Stack.of(this).stackName}}-api`,
       description: 'API for {self.app_name}',
       defaultCorsPreflightOptions: {{
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowOrigins: corsAllowedOrigins,
         allowMethods: apigateway.Cors.ALL_METHODS,
         allowHeaders: ['Content-Type', 'Authorization'],
       }},
@@ -457,10 +476,14 @@ resource "aws_cognito_user_pool" "main" {{
     require_symbols   = false
   }}
 
-  mfa_configuration = "OPTIONAL"
+  mfa_configuration = "ON"
 
   software_token_mfa_configuration {{
     enabled = true
+  }}
+
+  admin_create_user_config {{
+    allow_admin_create_user_only = true
   }}
 
   schema {{

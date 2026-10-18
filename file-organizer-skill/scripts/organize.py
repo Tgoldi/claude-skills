@@ -50,6 +50,14 @@ class FileOrganizer:
         
         return os.path.join(self.root_dir, "Others")
 
+    def _is_within_root(self, path):
+        root = os.path.realpath(self.root_dir)
+        real = os.path.realpath(path)
+        try:
+            return os.path.commonpath([root, real]) == root
+        except ValueError:
+            return False
+
     def handle_conflict(self, target_path):
         if not os.path.exists(target_path):
             return target_path
@@ -73,6 +81,10 @@ class FileOrganizer:
 
         # Conflict Resolution
         final_dest = self.handle_conflict(dest_path)
+
+        if not (self._is_within_root(file_path) and self._is_within_root(final_dest)):
+            logger.error(f"Skipping path outside root directory: {file_path}")
+            return
 
         if self.dry_run:
             logger.info(f"[DRY RUN] Move '{os.path.basename(file_path)}' -> '{os.path.relpath(final_dest, self.root_dir)}'")
@@ -121,8 +133,14 @@ class FileOrganizer:
         
         logger.info(f"Undoing {len(history)} operations...")
         for item in reversed(history):
-            src = item['src']
-            dst = item['dst']
+            src = os.path.realpath(item['src'])
+            dst = os.path.realpath(item['dst'])
+            if not (self._is_within_root(src) and self._is_within_root(dst)):
+                logger.error(f"Skipping undo entry outside root directory: {dst} -> {src}")
+                continue
+            if os.path.islink(item['dst']):
+                logger.error(f"Skipping undo entry that is a symlink: {item['dst']}")
+                continue
             try:
                 if os.path.exists(dst):
                     shutil.move(dst, src)

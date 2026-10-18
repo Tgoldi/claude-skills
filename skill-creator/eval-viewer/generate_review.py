@@ -122,7 +122,14 @@ def build_run(root: Path, run_dir: Path) -> dict | None:
     outputs_dir = run_dir / "outputs"
     output_files: list[dict] = []
     if outputs_dir.is_dir():
+        workspace_resolved = root.resolve()
         for f in sorted(outputs_dir.iterdir()):
+            if f.is_symlink():
+                continue
+            try:
+                f.resolve().relative_to(workspace_resolved)
+            except ValueError:
+                continue
             if f.is_file() and f.name not in METADATA_FILES:
                 output_files.append(embed_file(f))
 
@@ -276,7 +283,14 @@ def generate_html(
     if benchmark:
         embedded["benchmark"] = benchmark
 
-    data_json = json.dumps(embedded)
+    data_json = (
+        json.dumps(embedded)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
 
     return template.replace("/*__EMBEDDED_DATA__*/", f"const EMBEDDED_DATA = {data_json};")
 
@@ -360,7 +374,25 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         if self.path == "/api/feedback":
-            length = int(self.headers.get("Content-Length", 0))
+            host = self.headers.get("Host", "")
+            allowed_hosts = {"localhost", "127.0.0.1"}
+            if host.rsplit(":", 1)[0] not in allowed_hosts:
+                self.send_error(403)
+                return
+            origin = self.headers.get("Origin")
+            if origin is not None:
+                origin_host = origin.split("://", 1)[-1].rsplit(":", 1)[0]
+                if origin_host not in allowed_hosts:
+                    self.send_error(403)
+                    return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                self.send_error(400)
+                return
+            if length < 0 or length > 1024 * 1024:
+                self.send_error(413)
+                return
             body = self.rfile.read(length)
             try:
                 data = json.loads(body)

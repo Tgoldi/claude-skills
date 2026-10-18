@@ -165,6 +165,12 @@ class RouteScanner:
         else:
             route_path = url_path
 
+        # Reject routes with characters that could inject into generated code
+        if not re.fullmatch(r'/[A-Za-z0-9._~\-\[\]()/.]*', route_path):
+            if self.verbose:
+                print(f"  Skipping route with unsafe characters: {route_path!r}")
+            return
+
         # Detect dynamic parameters
         params = re.findall(r'\[([^\]]+)\]', route_path)
         has_params = len(params) > 0
@@ -206,6 +212,18 @@ class RouteScanner:
                 pass
 
 
+def _js_str(value: str) -> str:
+    """Return a safely escaped single-quoted JavaScript string literal body."""
+    return (
+        json.dumps(value)[1:-1]
+        .replace("'", "\\'")
+        .replace('`', '\\u0060')
+        .replace('$', '\\u0024')
+        .replace('\u2028', '\\u2028')
+        .replace('\u2029', '\\u2029')
+    )
+
+
 class TestGenerator:
     """Generates Playwright test files"""
 
@@ -228,7 +246,7 @@ class TestGenerator:
 
         # Test describe block
         route_name = route.path if route.path != '/' else 'Home'
-        lines.append(f"test.describe('{route_name}', () => {{")
+        lines.append(f"test.describe('{_js_str(route_name)}', () => {{")
 
         # Generate test cases based on route features
         test_cases = self._generate_test_cases(route)
@@ -245,12 +263,16 @@ class TestGenerator:
     def _generate_test_cases(self, route: RouteInfo) -> List[str]:
         """Generate test cases based on route features"""
         cases = []
-        url = self._get_test_url(route)
+        url = _js_str(self._get_test_url(route))
+        url_regex = (
+            re.escape(route.path.replace('[', '').replace(']', '.*'))
+            .replace('/', '\\/')
+        )
 
         # Basic navigation test
         cases.append(f'''  test('loads successfully', async ({{ page }}) => {{
     await page.goto('{url}');
-    await expect(page).toHaveURL(/{re.escape(route.path.replace('[', '').replace(']', '.*'))}/);
+    await expect(page).toHaveURL(/{url_regex}/);
     // TODO: Add specific content assertions
   }});''')
 
@@ -273,7 +295,7 @@ class TestGenerator:
     // TODO: Set up authentication
     // await page.context().addCookies([{{ name: 'session', value: '...' }}]);
     await page.goto('{url}');
-    await expect(page).toHaveURL(/{re.escape(route.path.replace('[', '').replace(']', '.*'))}/);
+    await expect(page).toHaveURL(/{url_regex}/);
   }});''')
 
         # Form tests
@@ -424,7 +446,7 @@ class PageObjectGenerator:
             lines.append(f"    await this.page.goto(`{url_template}`);")
         else:
             lines.append("  async goto() {")
-            lines.append(f"    await this.page.goto('{route.path}');")
+            lines.append(f"    await this.page.goto('{_js_str(route.path)}');")
         lines.append("  }")
         lines.append('')
 

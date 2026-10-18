@@ -16,9 +16,25 @@ LLM Base URL: https://api.aisa.one/v1
 
 import asyncio
 import json
+import re
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 import httpx
+
+_TICKER_RE = re.compile(r"^[A-Z]{1,5}$")
+
+
+def validate_ticker(ticker: str) -> str:
+    """Normalize and validate a US stock ticker (1-5 capital letters)."""
+    if not isinstance(ticker, str):
+        raise ValueError("Ticker must be a string")
+    normalized = ticker.strip().upper()
+    if not _TICKER_RE.fullmatch(normalized):
+        raise ValueError(
+            f"Invalid ticker {ticker!r}: expected 1 to 5 letters (A-Z)"
+        )
+    return normalized
+
 
 class AIsaStockAnalyst:
     """
@@ -52,6 +68,8 @@ class AIsaStockAnalyst:
         Returns:
             Complete analysis report
         """
+        ticker = validate_ticker(ticker)
+        
         if models is None:
             models = ["gpt-4", "claude-3-opus"]
         
@@ -534,7 +552,11 @@ Respond ONLY with valid JSON."""
 async def main():
     """Example: Analyze NVIDIA stock."""
     api_key = input("Enter your AIsa API key: ")
-    ticker = input("Enter stock ticker (e.g., NVDA, AAPL): ").strip().upper()
+    try:
+        ticker = validate_ticker(input("Enter stock ticker (e.g., NVDA, AAPL): "))
+    except ValueError as e:
+        print(f"❌ Error: {str(e)}")
+        return
     
     analyst = AIsaStockAnalyst(api_key=api_key)
     

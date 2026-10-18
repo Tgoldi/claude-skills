@@ -55,6 +55,10 @@ class TestFile:
     imports: Set[str] = field(default_factory=set)
 
 
+_IDENT_RE = re.compile(r'[A-Za-z_$][\w$]*')
+_SAFE_IMPORT_PART_RE = re.compile(r'[A-Za-z0-9_.\-@ ]+')
+
+
 class ComponentScanner:
     """Scans source files for React components"""
 
@@ -142,6 +146,10 @@ class ComponentScanner:
 
     def _add_component(self, name: str, file_path: Path, content: str, component_type: str):
         """Add a component to the list if not already present"""
+        # Reject names that are not plain identifiers (they are interpolated into generated code)
+        if not re.fullmatch(r'[A-Z][A-Za-z0-9]*', name):
+            return
+
         # Check if already added
         for comp in self.components:
             if comp.name == name and comp.file_path == str(file_path):
@@ -156,6 +164,7 @@ class ComponentScanner:
         if props_match:
             props_str = props_match.group(1) or ''
             props = [p.strip().split(':')[0].strip() for p in props_str.split(',') if p.strip()]
+            props = [p for p in props if _IDENT_RE.fullmatch(p)]
 
         # Extract imports
         imports = re.findall(r"import\s+(?:{[^}]+}|[^;]+)\s+from\s+['\"]([^'\"]+)['\"]", content)
@@ -233,9 +242,13 @@ class TestGenerator:
         path = Path(file_path)
         # Remove extension
         stem = path.stem
+        parent = path.parent.name
+        if not _SAFE_IMPORT_PART_RE.fullmatch(stem) or (parent and not _SAFE_IMPORT_PART_RE.fullmatch(parent)):
+            # Unsafe characters in path: fall back to a placeholder the user must fix
+            return "../REPLACE_WITH_COMPONENT_PATH"
         if stem == 'index':
-            return f"../{path.parent.name}"
-        return f"../{path.parent.name}/{stem}"
+            return f"../{parent}"
+        return f"../{parent}/{stem}"
 
     def _generate_render_test(self, component: ComponentInfo) -> TestCase:
         """Generate a basic render test"""
@@ -460,7 +473,16 @@ class TestSuiteGenerator:
 
             # Write test file
             test_filename = f"{component.name}.test.tsx"
+            if not re.fullmatch(r'[A-Z][A-Za-z0-9]*\.test\.tsx', test_filename):
+                print(f"  Skipping component with unsafe name: {component.name!r}")
+                continue
             test_path = self.output_path / test_filename
+
+            resolved_out = self.output_path.resolve()
+            resolved_test = test_path.resolve()
+            if resolved_test.parent != resolved_out:
+                print(f"  Skipping {test_filename}: resolves outside output directory")
+                continue
 
             test_path.write_text(content, encoding='utf-8')
 

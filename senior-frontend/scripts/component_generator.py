@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -166,6 +167,11 @@ def generate_component(
     flat: bool = False,
 ) -> dict:
     """Generate component files."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        raise ValueError(
+            "Invalid component name: use only letters, numbers, dashes, and underscores"
+        )
+
     pascal_name = to_pascal_case(name)
     kebab_name = to_kebab_case(pascal_name)
 
@@ -175,10 +181,27 @@ def generate_component(
     else:
         component_dir = output_dir / pascal_name
 
+    # Ensure the resolved component directory stays inside the output directory
+    resolved_output = output_dir.resolve()
+    resolved_component = component_dir.resolve()
+    if resolved_component != resolved_output and resolved_output not in resolved_component.parents:
+        raise ValueError("Component directory escapes the output directory")
+
     files_created = []
+
+    def _safe_write(target: Path, text: str) -> None:
+        resolved_target = target.resolve()
+        if resolved_output not in resolved_target.parents:
+            raise ValueError("Output file escapes the output directory")
+        target.write_text(text)
 
     # Create directory
     component_dir.mkdir(parents=True, exist_ok=True)
+
+    # Re-check after creation in case a symlink was followed
+    resolved_component = component_dir.resolve()
+    if resolved_component != resolved_output and resolved_output not in resolved_component.parents:
+        raise ValueError("Component directory escapes the output directory")
 
     # Generate main component file
     if component_type == "hook":
@@ -189,28 +212,28 @@ def generate_component(
         template = TEMPLATES[component_type]
 
     content = template.format(name=pascal_name)
-    main_file.write_text(content)
+    _safe_write(main_file, content)
     files_created.append(str(main_file))
 
     # Generate test file
     if with_test and component_type != "hook":
         test_file = component_dir / f"{pascal_name}.test.tsx"
         test_content = TEMPLATES["test"].format(name=pascal_name)
-        test_file.write_text(test_content)
+        _safe_write(test_file, test_content)
         files_created.append(str(test_file))
 
     # Generate story file
     if with_story and component_type != "hook":
         story_file = component_dir / f"{pascal_name}.stories.tsx"
         story_content = TEMPLATES["story"].format(name=pascal_name)
-        story_file.write_text(story_content)
+        _safe_write(story_file, story_content)
         files_created.append(str(story_file))
 
     # Generate index file
     if with_index and not flat:
         index_file = component_dir / "index.ts"
         index_content = TEMPLATES["index"].format(name=pascal_name)
-        index_file.write_text(index_content)
+        _safe_write(index_file, index_content)
         files_created.append(str(index_file))
 
     return {

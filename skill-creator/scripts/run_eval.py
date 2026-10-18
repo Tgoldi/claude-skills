@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 import uuid
+import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -48,22 +49,33 @@ def run_single_query(
     stream events (content_block_start) rather than waiting for the
     full assistant message, which only arrives after tool execution.
     """
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", skill_name or ""):
+        raise ValueError(
+            f"Invalid skill name {skill_name!r}: only letters, numbers, dashes and underscores are allowed"
+        )
+    # Collapse all whitespace (including line breaks) and strip remaining
+    # control characters so the description is a single safe line.
+    skill_description = re.sub(r"[\x00-\x1f\x7f\x85\u2028\u2029]+", " ", skill_description or "")
+    skill_description = re.sub(r"\s+", " ", skill_description).strip()
+    # JSON string literals are valid YAML double-quoted scalars, so this is
+    # safely escaped for both the front matter and the body text.
+    quoted_desc = json.dumps(skill_description)
+
     unique_id = uuid.uuid4().hex[:8]
     clean_name = f"{skill_name}-skill-{unique_id}"
     project_commands_dir = Path(project_root) / ".claude" / "commands"
     command_file = project_commands_dir / f"{clean_name}.md"
+    if command_file.resolve().parent != project_commands_dir.resolve():
+        raise ValueError("Command file path escapes the commands directory")
 
     try:
         project_commands_dir.mkdir(parents=True, exist_ok=True)
-        # Use YAML block scalar to avoid breaking on quotes in description
-        indented_desc = "\n  ".join(skill_description.split("\n"))
         command_content = (
             f"---\n"
-            f"description: |\n"
-            f"  {indented_desc}\n"
+            f"description: {quoted_desc}\n"
             f"---\n\n"
             f"# {skill_name}\n\n"
-            f"This skill handles: {skill_description}\n"
+            f"This skill handles: {quoted_desc}\n"
         )
         command_file.write_text(command_content)
 

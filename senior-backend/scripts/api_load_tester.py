@@ -94,7 +94,8 @@ class HTTPClient:
         self.headers = headers or {}
         self.verify_ssl = verify_ssl
 
-        # Create SSL context
+        # Create SSL context (verification can only be disabled for loopback
+        # targets; this is enforced by validate_urls() before tests run)
         if not verify_ssl:
             self.ssl_context = ssl.create_default_context()
             self.ssl_context.check_hostname = False
@@ -467,6 +468,24 @@ class APILoadTester:
         }
 
 
+LOOPBACK_HOSTS = {'localhost', '127.0.0.1', '::1'}
+
+
+def validate_urls(urls: List[str], verify_ssl: bool) -> None:
+    """Validate target URLs; only allow disabled TLS verification for loopback."""
+    for url in urls:
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https'):
+            raise ValueError(f"Unsupported URL scheme for {url!r}: only http/https allowed")
+        if not parsed.hostname:
+            raise ValueError(f"Invalid URL (no host): {url!r}")
+        if not verify_ssl and parsed.hostname.lower() not in LOOPBACK_HOSTS:
+            raise ValueError(
+                f"--no-verify-ssl is only permitted for loopback hosts "
+                f"(localhost, 127.0.0.1, ::1); refusing for {parsed.hostname!r}"
+            )
+
+
 def parse_headers(header_args: Optional[List[str]]) -> Dict[str, str]:
     """Parse header arguments into dictionary."""
     headers = {}
@@ -539,7 +558,7 @@ Examples:
     parser.add_argument(
         '--no-verify-ssl',
         action='store_true',
-        help='Disable SSL certificate verification'
+        help='Disable SSL certificate verification (only allowed for localhost/loopback targets)'
     )
     parser.add_argument(
         '--verbose', '-v',
@@ -561,6 +580,12 @@ Examples:
     # Validate
     if args.compare and len(args.urls) < 2:
         print("Error: --compare requires two URLs", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        validate_urls(args.urls, verify_ssl=not args.no_verify_ssl)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
     # Parse headers
